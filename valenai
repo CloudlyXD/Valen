@@ -1,45 +1,29 @@
-import telebot
+from fastapi import FastAPI, Request
 import google.generativeai as genai
 import json
 import os
-import time
-import random
-from collections import deque
 import re
+from collections import deque
 from google.api_core import exceptions as google_exceptions
 import requests
-import threading  # Import threading for handling multiple bots
 
-# --- Bot Configuration ---
-BOT_INFO = {
-    "Valen": {"username": "ValenAIbot", "id": 7684513288, "first_name": "Valen"},
-}
-
-BOT_TOKENS = {
-    bot_name: os.getenv(f"{bot_name.upper()}_BOT_TOKEN") for bot_name in BOT_INFO
-}
+app = FastAPI()
 
 # --- Gemini API Keys ---
 API_KEYS_STRING = os.getenv("GEMINI_API_KEYS")
 if not API_KEYS_STRING:
     raise ValueError("Missing environment variable: GEMINI_API_KEYS")
-API_KEYS = API_KEYS_STRING.split(",")
-API_KEYS = [key.strip() for key in API_KEYS if key.strip()]
+API_KEYS = [key.strip() for key in API_KEYS_STRING.split(",") if key.strip()]
 if not API_KEYS:
     raise ValueError("No valid API keys found in GEMINI_API_KEYS")
 
 api_key_queue = deque(API_KEYS)
 
-# --- Constants ---
-MAX_MESSAGE_LENGTH = 4000
-MAX_HISTORY_LENGTH = 20
-CHAT_HISTORY_FILE = "public_bot_history.json"
+def get_next_api_key():
+    """Rotates and returns the next available API key."""
+    api_key_queue.rotate(-1)
+    return api_key_queue[0]
 
-
-# --- Initialize Bots ---
-bots = {name: telebot.TeleBot(token) for name, token in BOT_TOKENS.items()}
-
-# --- Configure Gemini API ---
 genai.configure(api_key=api_key_queue[0])  # Initial API key
 
 # --- Personality Prompt ---
@@ -742,184 +726,63 @@ Refined Communication Subtleties:
 """
 
 # --- Helper Functions ---
-
-def get_next_api_key():
-    """Rotates and returns the next available API key."""
-    api_key_queue.rotate(-1)
-    return api_key_queue[0]
-
-def load_chat_history(user_id):
-    try:
-        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data.get(str(user_id), [])
-    except (FileNotFoundError, json.JSONDecodeError):
-        print("⚠️ Chat history file not found or corrupted. Starting with an empty history.")
-        return []
-
-def save_chat_history(user_id, history):
-    try:
-        if os.path.exists(CHAT_HISTORY_FILE):
-            with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-                try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    data = {}
-        else:
-            data = {}
-        data[str(user_id)] = history
-        with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"❌ Error saving chat history: {e}")
-
-def trim_history(history, max_length=MAX_HISTORY_LENGTH):
-    return history[-max_length:]
-
 def remove_markdown(text):
-    """Removes basic Markdown formatting (bold, italics, etc.) from text."""
+    """Removes basic Markdown formatting."""
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
     text = re.sub(r'\*(.*?)\*', r'\1', text)
     text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
     text = re.sub(r'~~(.*?)~~', r'\1', text)
     return text
 
-# --- Message Handling ---
-def handle_message(message, bot_name):
-    user_id = str(message.chat.id)
-
-    chat_history = load_chat_history(user_id)
-
-    if message.from_user.username == 'CloudlyXD':
-        user_message = f"Cloudly: {message.text}"
-    else:
-        user_message = f"{message.from_user.first_name}: {message.text}"
-
-    chat_history.append(user_message)
-    chat_history = trim_history(chat_history)
-
-    responding_bot = bots[bot_name]
-
-    responding_bot.send_chat_action(message.chat.id, 'typing')
+# --- API Route for Web Requests ---
+@app.post("/chat")
+async def chat(request: Request):
+    data = await request.json()
+    user_message = data.get("message")
+    if not user_message:
+        return {"error": "No message provided"}
+    
     try:
         model = genai.GenerativeModel(
-    "gemini-2.0-flash",
-    generation_config={
-        "temperature": 2,          # Adjusts randomness (1.2 = balanced)
-        "top_p": 0.9,                # Controls diversity (0.9 = good variety)
-        "top_k": 60,                 # Limits token choices (40 = balanced)
-        "frequency_penalty": 0.5,     # Reduces word repetition (0.5 = avoids spam)
-        "presence_penalty": 0.6,      # Encourages new ideas (0.6 = balanced)
-    }
-)
-        prompt = f"{PERSONALITY_PROMPT}\n\n==== Chat History ====\n" + "\n".join(chat_history)
+            "gemini-2.0-flash",
+            generation_config={
+                "temperature": 2,
+                "top_p": 0.9,
+                "top_k": 60,
+                "frequency_penalty": 0.5,
+                "presence_penalty": 0.6,
+            }
+        )
+        prompt = f"{PERSONALITY_PROMPT}\n\nUser: {user_message}"
         response = model.generate_content(prompt)
-        bot_reply = response.text.strip()
-        bot_reply = remove_markdown(bot_reply)
+        bot_reply = remove_markdown(response.text.strip())
     except google_exceptions.ClientError as e:
         print(f"Gemini API ClientError: {e}")
         if "invalid API key" in str(e).lower():
             if len(api_key_queue) > 1:
-                print("Switching to the next API key (invalid key)...")
+                print("Switching to the next API key...")
                 api_key_queue.rotate(-1)
                 genai.configure(api_key=get_next_api_key())
-                return handle_message(message, bot_name)
+                return await chat(request)  # Retry with new key
             else:
-                bot_reply = "All API keys are invalid. Please check your configuration."
-
-        elif "maximum capacity" in str(e).lower() or "quota exceeded" in str(e).lower() or "resource has been exhausted" in str(e).lower():
+                return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
+        elif "quota exceeded" in str(e).lower():
             if len(api_key_queue) > 1:
-                print("Switching to the next API key (capacity)...")
+                print("Switching to the next API key (quota exceeded)...")
                 api_key_queue.rotate(-1)
                 genai.configure(api_key=get_next_api_key())
-                return handle_message(message, bot_name)
+                return await chat(request)  # Retry with new key
             else:
-                bot_reply = "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."
+                return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
         else:
-            bot_reply = "An error occurred while processing your request. Please try again later."
-
+            return {"response": "An error occurred while processing your request."}
     except Exception as e:
-        print(f"❌ Error generating response for {bot_name}: {e}")
-        bot_reply = "I encountered an error generating a response."
+        print(f"Error generating response: {e}")
+        return {"response": "An error occurred while generating a response."}
 
-    chat_history.append(bot_reply)
-    chat_history = trim_history(chat_history)
-    save_chat_history(user_id, chat_history)
+    return {"response": bot_reply}
 
-    try:
-        if len(bot_reply) > MAX_MESSAGE_LENGTH:
-            for i in range(0, len(bot_reply), MAX_MESSAGE_LENGTH):
-                responding_bot.reply_to(message, bot_reply[i:i + MAX_MESSAGE_LENGTH])
-                time.sleep(1)
-        else:
-            responding_bot.reply_to(message, bot_reply)
-    except Exception as e:
-        print(f"❌ Error sending response for {bot_name}: {e}")
-
-# --- Setup Handlers ---
-def setup_handlers():
-    for bot_name in bots.keys():
-        # Define a closure to capture the bot_name value
-        def create_handler(current_bot_name):
-            @bots[current_bot_name].message_handler(func=lambda message: True, content_types=['text'])
-            def message_handler(message):
-                handle_message(message, current_bot_name)
-        
-        create_handler(bot_name)
-
-# --- Start command ---
-def setup_start_command():
-    bot = bots['Valen']
-
-    @bot.message_handler(commands=['start'])
-    def send_welcome(message):
-        bot.reply_to(message, "Hello! How can I help you today? I'm Valen, and I'm here to assist you with any questions, tasks, or conversations you'd like to have. Feel free to let me know what's on your mind!")
-
-# --- Bot Polling Function ---
-def start_bot_polling(bot_name, bot_instance):
-    """Function to start polling for a specific bot with proper error handling"""
-    print(f"🚀 Starting {bot_name} bot...")
-    while True:
-        try:
-            bot_instance.polling(none_stop=True, timeout=10, long_polling_timeout=10)
-        except requests.exceptions.ConnectionError:
-            print(f"⚠️ Lost connection to Telegram for {bot_name}! Retrying in 5 seconds...")
-            time.sleep(5)
-        except requests.exceptions.ReadTimeout:
-            print(f"⏳ Telegram API timed out for {bot_name}! Restarting polling...")
-            time.sleep(5)
-        except Exception as e:
-            print(f"❌ Unexpected error for {bot_name}: {e}")
-            time.sleep(5)
-
-# --- Main Function ---
-def main():
-    # Setup handlers and commands
-    setup_start_command()
-    setup_handlers()
-    
-    # Create a thread for each bot
-    threads = []
-    for bot_name, bot_instance in bots.items():
-        thread = threading.Thread(
-            target=start_bot_polling,
-            args=(bot_name, bot_instance),
-            daemon=True
-        )
-        threads.append(thread)
-        thread.start()
-        print(f"✅ {bot_name} bot thread started")
-    
-    # Main thread will keep the program running
-    try:
-        while threads:
-            for thread in threads[:]:
-                if not thread.is_alive():
-                    threads.remove(thread)
-                    print("⚠️ A bot thread has died unexpectedly")
-            time.sleep(60)  # Check threads every minute
-    except KeyboardInterrupt:
-        print("👋 Shutting down bots gracefully...")
-
+# --- Run the API ---
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
