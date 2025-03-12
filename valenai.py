@@ -744,17 +744,17 @@ def remove_markdown(text):
     text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
     text = re.sub(r'~~(.*?)~~', r'\1', text)
     return text
-def load_chat_history(user_id):
-    """Loads chat history for a specific user."""
+def load_chat_history(user_id, chat_id):
+    """Loads chat history for a specific user and chat."""
     try:
         with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data.get(str(user_id), [])
+            return data.get(str(user_id), {}).get(str(chat_id), [])
     except (FileNotFoundError, json.JSONDecodeError):
         return []
 
-def save_chat_history(user_id, history):
-    """Saves chat history for a specific user."""
+def save_chat_history(user_id, chat_id, history):
+    """Saves chat history for a specific user and chat."""
     try:
         if os.path.exists(CHAT_HISTORY_FILE):
             with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -764,11 +764,17 @@ def save_chat_history(user_id, history):
                     data = {}
         else:
             data = {}
-        data[str(user_id)] = history
+
+        if str(user_id) not in data:
+            data[str(user_id)] = {}
+
+        data[str(user_id)][str(chat_id)] = history  # Save chat under chat_id
+
         with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
     except Exception as e:
         print(f"❌ Error saving chat history: {e}")
+
     
 # --- API Route for Web Requests ---
 @app.post("/chat")
@@ -793,7 +799,8 @@ async def chat(request: Request):
         )
 
         # Load chat history for this user
-        chat_history = load_chat_history(user_id)  # FIXED INDENTATION HERE
+        chat_id = data.get("chat_id", "default")  # Get chat ID from frontend
+        chat_history = load_chat_history(user_id, chat_id)  # Load history for specific chat
 
         # Add new message to history
         chat_history.append(f"User: {user_message}")
@@ -807,7 +814,8 @@ async def chat(request: Request):
 
         # Save updated history
         chat_history.append(f"AI: {bot_reply}")
-        save_chat_history(user_id, chat_history)
+        save_chat_history(user_id, chat_id, chat_history)  # Save history under chat ID
+
 
     except google_exceptions.ClientError as e:
         print(f"Gemini API ClientError: {e}")
