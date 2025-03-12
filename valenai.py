@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 import json
 import os
@@ -8,6 +9,14 @@ from google.api_core import exceptions as google_exceptions
 import requests
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # --- Gemini API Keys ---
 API_KEYS_STRING = os.getenv("GEMINI_API_KEYS")
