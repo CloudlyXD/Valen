@@ -7,6 +7,8 @@ import re
 from collections import deque
 from google.api_core import exceptions as google_exceptions
 import requests
+CHAT_HISTORY_FILE = "web_chat_history.json"
+
 
 app = FastAPI()
 app.add_middleware(
@@ -742,12 +744,38 @@ def remove_markdown(text):
     text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
     text = re.sub(r'~~(.*?)~~', r'\1', text)
     return text
+def load_chat_history(user_id):
+    """Loads chat history for a specific user."""
+    try:
+        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get(str(user_id), [])
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def save_chat_history(user_id, history):
+    """Saves chat history for a specific user."""
+    try:
+        if os.path.exists(CHAT_HISTORY_FILE):
+            with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    data = {}
+        else:
+            data = {}
+        data[str(user_id)] = history
+        with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"❌ Error saving chat history: {e}")
 
 # --- API Route for Web Requests ---
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
-    user_message = data.get("message")
+    user_id = data.get("user_id", "unknown_user")  # Get user ID from request
+user_message = data.get("message")
     if not user_message:
         return {"error": "No message provided"}
     
@@ -762,7 +790,23 @@ async def chat(request: Request):
                 "presence_penalty": 0.6,
             }
         )
-        prompt = f"{PERSONALITY_PROMPT}\n\nUser: {user_message}"
+        # Load chat history for this user
+chat_history = load_chat_history(user_id)
+
+# Add new message to history
+chat_history.append(f"User: {user_message}")
+chat_history = chat_history[-100:]  # Keep last 100 messages
+
+# Generate AI response with history
+history_text = "\n".join(chat_history)
+prompt = f"{PERSONALITY_PROMPT}\n\n{history_text}\nAI:"
+response = model.generate_content(prompt)
+bot_reply = remove_markdown(response.text.strip())
+
+# Save updated history
+chat_history.append(f"AI: {bot_reply}")
+save_chat_history(user_id, chat_history)
+
         response = model.generate_content(prompt)
         bot_reply = remove_markdown(response.text.strip())
     except google_exceptions.ClientError as e:
