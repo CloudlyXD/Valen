@@ -769,13 +769,14 @@ def save_chat_history(user_id, history):
             json.dump(data, f, indent=4, ensure_ascii=False)
     except Exception as e:
         print(f"❌ Error saving chat history: {e}")
-
+    
 # --- API Route for Web Requests ---
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")  # Get user ID from request
-user_message = data.get("message")
+    user_message = data.get("message")  # FIXED INDENTATION HERE
+
     if not user_message:
         return {"error": "No message provided"}
     
@@ -790,25 +791,24 @@ user_message = data.get("message")
                 "presence_penalty": 0.6,
             }
         )
+
         # Load chat history for this user
-chat_history = load_chat_history(user_id)
+        chat_history = load_chat_history(user_id)  # FIXED INDENTATION HERE
 
-# Add new message to history
-chat_history.append(f"User: {user_message}")
-chat_history = chat_history[-100:]  # Keep last 100 messages
+        # Add new message to history
+        chat_history.append(f"User: {user_message}")
+        chat_history = chat_history[-100:]  # Keep last 100 messages
 
-# Generate AI response with history
-history_text = "\n".join(chat_history)
-prompt = f"{PERSONALITY_PROMPT}\n\n{history_text}\nAI:"
-response = model.generate_content(prompt)
-bot_reply = remove_markdown(response.text.strip())
-
-# Save updated history
-chat_history.append(f"AI: {bot_reply}")
-save_chat_history(user_id, chat_history)
-
+        # Generate AI response with history
+        history_text = "\n".join(chat_history)
+        prompt = f"{PERSONALITY_PROMPT}\n\n{history_text}\nAI:"
         response = model.generate_content(prompt)
         bot_reply = remove_markdown(response.text.strip())
+
+        # Save updated history
+        chat_history.append(f"AI: {bot_reply}")
+        save_chat_history(user_id, chat_history)
+
     except google_exceptions.ClientError as e:
         print(f"Gemini API ClientError: {e}")
         if "invalid API key" in str(e).lower():
@@ -833,9 +833,10 @@ save_chat_history(user_id, chat_history)
         print(f"Error generating response: {e}")
         return {"response": "An error occurred while generating a response."}
 
-    return {"response": bot_reply}
+    return {"response": bot_reply}  # RETURN CORRECTLY
 
 # --- Run the API ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
