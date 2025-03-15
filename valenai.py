@@ -99,10 +99,16 @@ Generate a short, descriptive title for a chat conversation based on this user m
 Requirements:
 - Must be between 6-60 characters long
 - Should capture the main topic or question
+- Extract the core subject or question from the message
+- Focus on the main intent or topic, not just repeating words
 - Should be a complete thought/phrase (not cut off)
 - Should be relevant and specific to the content
+- Be specific rather than generic whenever possible
 - Do not include quotation marks in your answer
+- Format as a noun phrase or short statement (not a complete sentence with subject-verb-object)
+- Avoid starting with phrases like "How to" or "Question about" unless necessary
 - If the user sends only greetings like "Hello," "Hi," "Hey," or any other greeting, the chat title should be "Friendly Greeting," "Friendly Assistance Offered," or "Greeting and Assistance." Remember, this naming convention applies only if the user's message consists solely of greetings.
+- Do not include quotation marks or special characters
 
 Just return the title text with no additional explanations or prefixes.
 """
