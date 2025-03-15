@@ -805,7 +805,7 @@ async def create_chat(request: Request):
     # Respond with the title *and* the initial bot reply
     try:
         model = genai.GenerativeModel(
-            "gemini-pro",
+            "gemini-2.0-pro-exp-02-05",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -840,12 +840,12 @@ async def chat(request: Request):
 
     try:
         model = genai.GenerativeModel(
-            "gemini-pro",
+            "gemini-2.0-flash",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
                 "top_k": 40,
-                "max_output_tokens": 1024,
+                "max_output_tokens": 6000,
             }
         )
 
