@@ -121,7 +121,7 @@ Just return the title text with no additional explanations or prefixes.
         title = re.sub(r'"', '', title)  # Remove any remaining quotes
 
         # 4. Ensure title is not empty or too short
-        if not title or len(title) < 3:
+        if not title or len(title) < 6:
             # Try to extract a meaningful title from the message itself
             words = first_message.split()
             if len(words) >= 3:
