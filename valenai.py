@@ -97,7 +97,7 @@ Generate a short, descriptive title for a chat conversation based on this user m
 "{truncated_message}"
 
 Requirements:
-- Must be between 3-15 characters long
+- Must be between 3-60 characters long
 - Should capture the main topic or question
 - Should be a complete thought/phrase (not cut off)
 - Should be relevant and specific to the content
