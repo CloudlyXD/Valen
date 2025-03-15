@@ -7,8 +7,8 @@ import re
 from collections import deque
 from google.api_core import exceptions as google_exceptions
 import requests
-CHAT_HISTORY_FILE = "web_chat_history.json"
 
+CHAT_HISTORY_FILE = "web_chat_history.json"
 
 app = FastAPI()
 app.add_middleware(
@@ -18,7 +18,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # --- Gemini API Keys ---
 API_KEYS_STRING = os.getenv("GEMINI_API_KEYS")
@@ -733,8 +732,7 @@ Refined Communication Subtleties:
 - Valen maintains consistent depth and thoroughness throughout responses rather than front-loading quality
 - Valen avoids both verbosity and excessive brevity, finding the appropriate depth for each specific context
 - Valen occasionally uses measured self-reference when helpful for clarity: "Let me explore this from another angle..."
-
-"""
+ """
 
 # --- Helper Functions ---
 def remove_markdown(text):
@@ -744,6 +742,7 @@ def remove_markdown(text):
     text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
     text = re.sub(r'~~(.*?)~~', r'\1', text)
     return text
+
 def load_chat_history(user_id, chat_id):
     """Loads chat history for a specific user and chat."""
     try:
@@ -775,46 +774,65 @@ def save_chat_history(user_id, chat_id, history):
     except Exception as e:
         print(f"❌ Error saving chat history: {e}")
 
-    
+
+def generate_title(first_message: str) -> str:
+    """Generates a concise title for the chat based on the first message."""
+    try:
+        model = genai.GenerativeModel("gemini-2.0-pro-exp-02-05") # Use a specific, fast model. I changed here
+        prompt = f"Generate a concise and descriptive title (maximum 15 characters) for a chat conversation based on this user message: '{first_message}'"
+        response = model.generate_content(prompt)
+        title = response.text.strip()
+        # Basic sanitization and length limit
+        title = re.sub(r'[^\w\s-]', '', title)  # Remove special characters
+        return title[:15]  # Limit to 15 characters
+    except Exception as e:
+        print(f"Error generating title: {e}")
+        return "New Chat"  # Fallback title
+
+
 # --- API Route for Web Requests ---
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")  # Get user ID from request
-    user_message = data.get("message")  # FIXED INDENTATION HERE
+    chat_id = data.get("chat_id", "default")  # Get chat ID from frontend
+    user_message = data.get("message")
 
     if not user_message:
         return {"error": "No message provided"}
-    
+
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-2.0-flash",  # Use a specific, fast model. I changed here.
             generation_config={
-                "temperature": 2,
+                "temperature": 1.5, # Modified for better result.
                 "top_p": 0.9,
-                "top_k": 60,
-                "frequency_penalty": 0.5,
-                "presence_penalty": 0.6,
+                "top_k": 50, # Modified for better result.
+                "max_output_tokens": 6000,  # Add a reasonable max length
             }
         )
 
-        # Load chat history for this user
-        chat_id = data.get("chat_id", "default")  # Get chat ID from frontend
-        chat_history = load_chat_history(user_id, chat_id)  # Load history for specific chat
+        chat_history = load_chat_history(user_id, chat_id)
+        is_first_message = len(chat_history) == 0  # Check if first message
 
-        # Add new message to history
         chat_history.append(f"User: {user_message}")
-        chat_history = chat_history[-100:]  # Keep last 100 messages
+        chat_history = chat_history[-100:]
 
-        # Generate AI response with history
-        history_text = "\n".join(chat_history)
-        prompt = f"{PERSONALITY_PROMPT}\n\n{history_text}\nAI:"
+        prompt = f"{PERSONALITY_PROMPT}\n\n{chr(10).join(chat_history)}\nAI:"  # Use join for history
         response = model.generate_content(prompt)
         bot_reply = remove_markdown(response.text.strip())
 
-        # Save updated history
         chat_history.append(f"AI: {bot_reply}")
-        save_chat_history(user_id, chat_id, chat_history)  # Save history under chat ID
+        save_chat_history(user_id, chat_id, chat_history)
+
+
+        # Title generation logic (only for the first message)
+        if is_first_message:
+            title = generate_title(user_message)
+            return {"response": bot_reply, "title": title} # Return title + response
+        else:
+            return {"response": bot_reply}
+
 
 
     except google_exceptions.ClientError as e:
@@ -837,14 +855,13 @@ async def chat(request: Request):
                 return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
         else:
             return {"response": "An error occurred while processing your request."}
+
     except Exception as e:
         print(f"Error generating response: {e}")
         return {"response": "An error occurred while generating a response."}
 
-    return {"response": bot_reply}  # RETURN CORRECTLY
 
 # --- Run the API ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
