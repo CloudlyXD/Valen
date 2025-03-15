@@ -13,7 +13,7 @@ CHAT_HISTORY_FILE = "web_chat_history.json"
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -732,7 +732,7 @@ Refined Communication Subtleties:
 - Valen maintains consistent depth and thoroughness throughout responses rather than front-loading quality
 - Valen avoids both verbosity and excessive brevity, finding the appropriate depth for each specific context
 - Valen occasionally uses measured self-reference when helpful for clarity: "Let me explore this from another angle..."
- """
+"""
 
 # --- Helper Functions ---
 def remove_markdown(text):
@@ -767,8 +767,7 @@ def save_chat_history(user_id, chat_id, history):
         if str(user_id) not in data:
             data[str(user_id)] = {}
 
-        data[str(user_id)][str(chat_id)] = history  # Save chat under chat_id
-
+        data[str(user_id)][str(chat_id)] = history
         with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
     except Exception as e:
@@ -778,7 +777,7 @@ def save_chat_history(user_id, chat_id, history):
 def generate_title(first_message: str) -> str:
     """Generates a concise title for the chat based on the first message."""
     try:
-        model = genai.GenerativeModel("gemini-2.0-pro-exp-02-05") # Use a specific, fast model. I changed here
+        model = genai.GenerativeModel("gemini-pro")
         prompt = f"Generate a concise and descriptive title (maximum 15 characters) for a chat conversation based on this user message: '{first_message}'"
         response = model.generate_content(prompt)
         title = response.text.strip()
@@ -789,50 +788,80 @@ def generate_title(first_message: str) -> str:
         print(f"Error generating title: {e}")
         return "New Chat"  # Fallback title
 
+# --- New API route to create chat ---
+@app.post("/create_chat")
+async def create_chat(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")  # Must be provided by the frontend
+    first_message = data.get("message")
+
+    if not chat_id or not first_message:
+        return {"error": "Missing chat_id or message"}
+
+    # Generate the title *before* saving any history
+    title = generate_title(first_message)
+
+    # Respond with the title *and* the initial bot reply
+    try:
+        model = genai.GenerativeModel(
+            "gemini-pro",
+            generation_config={
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+                "max_output_tokens": 1024,
+            }
+        )
+        prompt = f"{PERSONALITY_PROMPT}\n\nUser: {first_message}\nAI:" # Initial Prompt
+        response = model.generate_content(prompt)
+        bot_reply = remove_markdown(response.text.strip())
+
+        # Now that we have title, save the initial messages in history:
+        chat_history = [f"User: {first_message}", f"AI: {bot_reply}"]
+        save_chat_history(user_id, chat_id, chat_history)
+
+        return {"title": title, "response": bot_reply}  # Return title and AI reply
+    except Exception as e:
+        print("Error on create_chat", e)
+        return {"title": "New Chat", "response": "Error"}
+
 
 # --- API Route for Web Requests ---
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
-    user_id = data.get("user_id", "unknown_user")  # Get user ID from request
-    chat_id = data.get("chat_id", "default")  # Get chat ID from frontend
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")  # Get chat ID from frontend
     user_message = data.get("message")
 
-    if not user_message:
-        return {"error": "No message provided"}
+    if not user_message or not chat_id: # Added chat_id validation
+        return {"error": "No message or chat ID provided"}
 
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",  # Use a specific, fast model. I changed here.
+            "gemini-pro",
             generation_config={
-                "temperature": 1.5, # Modified for better result.
+                "temperature": 0.7,
                 "top_p": 0.9,
-                "top_k": 50, # Modified for better result.
-                "max_output_tokens": 6000,  # Add a reasonable max length
+                "top_k": 40,
+                "max_output_tokens": 1024,
             }
         )
 
         chat_history = load_chat_history(user_id, chat_id)
-        is_first_message = len(chat_history) == 0  # Check if first message
 
         chat_history.append(f"User: {user_message}")
         chat_history = chat_history[-100:]
 
-        prompt = f"{PERSONALITY_PROMPT}\n\n{chr(10).join(chat_history)}\nAI:"  # Use join for history
+        prompt = f"{PERSONALITY_PROMPT}\n\n{chr(10).join(chat_history)}\nAI:"
         response = model.generate_content(prompt)
         bot_reply = remove_markdown(response.text.strip())
 
         chat_history.append(f"AI: {bot_reply}")
         save_chat_history(user_id, chat_id, chat_history)
 
-
-        # Title generation logic (only for the first message)
-        if is_first_message:
-            title = generate_title(user_message)
-            return {"response": bot_reply, "title": title} # Return title + response
-        else:
-            return {"response": bot_reply}
-
+        return {"response": bot_reply}
 
 
     except google_exceptions.ClientError as e:
