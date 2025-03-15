@@ -102,6 +102,7 @@ Requirements:
 - Should be a complete thought/phrase (not cut off)
 - Should be relevant and specific to the content
 - Do not include quotation marks in your answer
+- If the user sends only greetings like "Hello," "Hi," "Hey," or any other greeting, the chat title should be "Friendly Greeting," "Friendly Assistance Offered," or "Greeting and Assistance." Remember, this naming convention applies only if the user's message consists solely of greetings.
 
 Just return the title text with no additional explanations or prefixes.
 """
