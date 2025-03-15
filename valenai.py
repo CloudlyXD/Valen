@@ -97,7 +97,7 @@ Generate a short, descriptive title for a chat conversation based on this user m
 "{truncated_message}"
 
 Requirements:
-- Must be between 3-60 characters long
+- Must be between 6-60 characters long
 - Should capture the main topic or question
 - Should be a complete thought/phrase (not cut off)
 - Should be relevant and specific to the content
@@ -124,7 +124,7 @@ Just return the title text with no additional explanations or prefixes.
                 title = first_message if first_message else "New Chat"
 
         # 5. Ensure title doesn't exceed 15 characters but try to keep complete words
-        if len(title) > 15:
+        if len(title) > 60:
             words = title.split()
             title = ""
             for word in words:
@@ -139,7 +139,7 @@ Just return the title text with no additional explanations or prefixes.
         # Fallback: use the first few words of the message
         words = first_message.split()[:3]
         fallback_title = " ".join(words)
-        return fallback_title[:15] if fallback_title else "New Chat"
+        return fallback_title[:60] if fallback_title else "New Chat"
 
 # --- New API route to create chat ---
 @app.post("/create_chat")
