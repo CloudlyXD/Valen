@@ -86,7 +86,7 @@ def save_chat_history(user_id, chat_id, history):
 def generate_title(first_message: str) -> str:
     """Generates a concise title for the chat based on the first message."""
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash") # CHANGED HERE
+        model = genai.GenerativeModel("gemini-2.0-flash")
         prompt = f"Generate a concise and descriptive title (maximum 15 characters) for a chat conversation based on this user message: '{first_message}'"
         response = model.generate_content(prompt)
         title = response.text.strip()
@@ -119,7 +119,7 @@ async def create_chat(request: Request):
     # Respond with the title *and* the initial bot reply
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash", # CHANGED HERE
+            "gemini-2.0-flash",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -130,6 +130,9 @@ async def create_chat(request: Request):
         prompt = f"{PERSONALITY_PROMPT}\n\nUser: {first_message}\nAI:" # Initial Prompt
         response = model.generate_content(prompt)
         bot_reply = remove_markdown(response.text.strip()) if response.text else "I'm sorry, I couldn't generate a response. Please try again."
+
+        # Remove "Valen:" prefix if present
+        bot_reply = bot_reply.replace("Valen:", "").strip()
 
         # Now that we have title, save the initial messages in history:
         chat_history = [f"User: {first_message}", f"AI: {bot_reply}"]
@@ -149,12 +152,12 @@ async def chat(request: Request):
     chat_id = data.get("chat_id")  # Get chat ID from frontend
     user_message = data.get("message")
 
-    if not user_message or not chat_id: # Added chat_id validation
+    if not user_message or not chat_id:
         return {"error": "No message or chat ID provided"}
 
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash", # CHANGED HERE
+            "gemini-2.0-flash",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -176,6 +179,9 @@ async def chat(request: Request):
             bot_reply = remove_markdown(response.text.strip())
         else:
             bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
+
+        # Remove "Valen:" prefix if present
+        bot_reply = bot_reply.replace("Valen:", "").strip()
 
         chat_history.append(f"AI: {bot_reply}")
         save_chat_history(user_id, chat_id, chat_history)
