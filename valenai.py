@@ -84,23 +84,61 @@ def save_chat_history(user_id, chat_id, history):
 
 
 def generate_title(first_message: str) -> str:
-    """Generates a concise title for the chat based on the first message."""
+    """Generates a concise but meaningful title for the chat based on the first message."""
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        prompt = f"Generate a concise and descriptive title (maximum 15 characters) for a chat conversation based on this user message: '{first_message}'"
+        # 1. Truncate very long messages for the title generation prompt
+        truncated_message = first_message[:200] + "..." if len(first_message) > 200 else first_message
+
+        model = genai.GenerativeModel("gemini-2.0-flash")  # Keep the model as specified
+
+        # 2. Improved prompt for better title generation
+        prompt = f"""
+Generate a short, descriptive title for a chat conversation based on this user message:
+"{truncated_message}"
+
+Requirements:
+- Must be between 3-15 characters long
+- Should capture the main topic or question
+- Should be a complete thought/phrase (not cut off)
+- Should be relevant and specific to the content
+- Do not include quotation marks in your answer
+
+Just return the title text with no additional explanations or prefixes.
+"""
+
         response = model.generate_content(prompt)
         title = response.text.strip()
-        # Basic sanitization and length limit
+
+        # 3. Basic sanitization
         title = re.sub(r'[^\w\s-]', '', title)  # Remove special characters
+        title = re.sub(r'"', '', title)  # Remove any remaining quotes
 
-        # Ensure title is not empty
-        if not title or title.isspace():
-            return "New Chat"
+        # 4. Ensure title is not empty or too short
+        if not title or len(title) < 3:
+            # Try to extract a meaningful title from the message itself
+            words = first_message.split()
+            if len(words) >= 3:
+                title = " ".join(words[:3])
+            else:
+                title = first_message if first_message else "New Chat"
 
-        return title[:15]  # Limit to 15 characters
+        # 5. Ensure title doesn't exceed 15 characters but try to keep complete words
+        if len(title) > 15:
+            words = title.split()
+            title = ""
+            for word in words:
+                if len(title + " " + word if title else word) <= 15:
+                    title += " " + word if title else word
+                else:
+                    break
+
+        return title
     except Exception as e:
         print(f"Error generating title: {e}")
-        return "New Chat"  # Fallback title
+        # Fallback: use the first few words of the message
+        words = first_message.split()[:3]
+        fallback_title = " ".join(words)
+        return fallback_title[:15] if fallback_title else "New Chat"
 
 # --- New API route to create chat ---
 @app.post("/create_chat")
