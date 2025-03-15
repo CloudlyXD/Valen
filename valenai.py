@@ -777,7 +777,7 @@ def save_chat_history(user_id, chat_id, history):
 def generate_title(first_message: str) -> str:
     """Generates a concise title for the chat based on the first message."""
     try:
-        model = genai.GenerativeModel("gemini-pro")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         prompt = f"Generate a concise and descriptive title (maximum 15 characters) for a chat conversation based on this user message: '{first_message}'"
         response = model.generate_content(prompt)
         title = response.text.strip()
