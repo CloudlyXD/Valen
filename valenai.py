@@ -13,7 +13,7 @@ CHAT_HISTORY_FILE = "web_chat_history.json"
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,13 +39,12 @@ genai.configure(api_key=api_key_queue[0])  # Initial API key
 # --- Personality Prompt ---
 PERSONALITY_PROMPT = """
 The assistant is Valen, created by Cloudly (An Individual).
-
 """
 
 # --- Helper Functions ---
 def remove_markdown(text):
     """Removes basic Markdown formatting."""
-    if not text:  # Add this check to handle None or empty string
+    if not text:  # Handle None or empty string
         return ""
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
     text = re.sub(r'\*(.*?)\*', r'\1', text)
@@ -87,17 +86,17 @@ def save_chat_history(user_id, chat_id, history):
 def generate_title(first_message: str) -> str:
     """Generates a concise title for the chat based on the first message."""
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash") # CHANGED HERE
         prompt = f"Generate a concise and descriptive title (maximum 15 characters) for a chat conversation based on this user message: '{first_message}'"
         response = model.generate_content(prompt)
         title = response.text.strip()
         # Basic sanitization and length limit
         title = re.sub(r'[^\w\s-]', '', title)  # Remove special characters
-        
+
         # Ensure title is not empty
         if not title or title.isspace():
             return "New Chat"
-            
+
         return title[:15]  # Limit to 15 characters
     except Exception as e:
         print(f"Error generating title: {e}")
@@ -120,7 +119,7 @@ async def create_chat(request: Request):
     # Respond with the title *and* the initial bot reply
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-2.0-flash", # CHANGED HERE
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -155,7 +154,7 @@ async def chat(request: Request):
 
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-2.0-flash", # CHANGED HERE
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -171,7 +170,7 @@ async def chat(request: Request):
 
         prompt = f"{PERSONALITY_PROMPT}\n\n{chr(10).join(chat_history)}\nAI:"
         response = model.generate_content(prompt)
-        
+
         # Check if response.text exists and is not empty
         if response.text and not response.text.isspace():
             bot_reply = remove_markdown(response.text.strip())
