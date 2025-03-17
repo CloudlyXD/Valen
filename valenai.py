@@ -95,7 +95,7 @@ def create_tables(conn):
         conn.rollback()  # Rollback changes if an error occurs
         raise
 
-# --- Database Connection and Table Creation ---
+# --- Database Connection and Table Creation --- 
 try:
     conn = get_db_connection()  # Establish the connection
     create_tables(conn)  # Create tables (if they don't exist)
