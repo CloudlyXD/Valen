@@ -380,6 +380,27 @@ async def get_chat_history(request: Request):
         print(f"Error fetching chat history: {e}")
         return {"error": "Failed to retrieve chat history", "history": []}
 
+@app.get("/chats")
+async def get_chats(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")  # Get user_id (for future use)
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT chat_id, title FROM chats WHERE user_id = %s ORDER BY chat_id",  # Simple query for now
+                (user_id,)
+            )
+            chats = [{"id": row[0], "title": row[1]} for row in cursor.fetchall()]
+
+        conn.close()
+        return {"chats": chats}
+
+    except Exception as e:
+        print(f"Error fetching chats: {e}")
+        return {"error": "Failed to retrieve chats", "chats": []}
+
 # --- Run the API ---
 if __name__ == "__main__":
     import uvicorn
