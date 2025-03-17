@@ -344,6 +344,41 @@ async def chat(request: Request):
         print(f"Error generating response: {e}")
         return {"response": "An error occurred while generating a response."}
 
+@app.post("/chat_history")
+async def get_chat_history(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")  # Although not used in the query, it's good practice
+    chat_id = data.get("chat_id")
+
+    if not chat_id:
+        return {"error": "Missing chat_id"}
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT role, content, timestamp FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                (chat_id,)
+            )
+            # Fetch all results
+            results = cursor.fetchall()
+
+            # Format as a list of dictionaries
+            history = []
+            for row in results:
+                role, content, timestamp = row  # Unpack the tuple
+                history.append({
+                    "role": role,
+                    "content": content,
+                    "timestamp": timestamp.isoformat()  # Convert to ISO format
+                })
+
+        conn.close()
+        return {"history": history}
+
+    except Exception as e:
+        print(f"Error fetching chat history: {e}")
+        return {"error": "Failed to retrieve chat history", "history": []}
 
 # --- Run the API ---
 if __name__ == "__main__":
