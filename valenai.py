@@ -13,7 +13,7 @@ import psycopg2.extras  # For using dictionaries with cursors
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later)
+    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later) 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
