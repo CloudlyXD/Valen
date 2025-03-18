@@ -382,21 +382,18 @@ async def get_chat_history(request: Request):
 
 @app.get("/chats")
 async def get_chats(request: Request):
-    data = await request.json()
-    user_id = data.get("user_id", "unknown_user")  # Get user_id (for future use)
-
+    # Extract user_id from query parameters
+    user_id = request.query_params.get("user_id", "unknown_user")
     try:
         conn = get_db_connection()
-        with conn.cursor() as cursor:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:  # Using DictCursor for cleaner code
             cursor.execute(
-                "SELECT chat_id, title FROM chats WHERE user_id = %s ORDER BY chat_id",  # Simple query for now
+                "SELECT chat_id, title FROM chats WHERE user_id = %s ORDER BY chat_id DESC",  # Sort newest first
                 (user_id,)
             )
-            chats = [{"id": row[0], "title": row[1]} for row in cursor.fetchall()]
-
+            chats = [{"id": row["chat_id"], "title": row["title"]} for row in cursor.fetchall()]
         conn.close()
         return {"chats": chats}
-
     except Exception as e:
         print(f"Error fetching chats: {e}")
         return {"error": "Failed to retrieve chats", "chats": []}
