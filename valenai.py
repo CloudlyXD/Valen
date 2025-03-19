@@ -87,20 +87,6 @@ def create_tables(conn):
                 );
                 """
             )
-
-            # ADD THIS BLOCK: Create the 'favorites' table
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS favorites (
-                    user_id TEXT NOT NULL,
-                    chat_id TEXT NOT NULL,
-                    PRIMARY KEY (user_id, chat_id),
-                    FOREIGN KEY (user_id) REFERENCES users(user_id),
-                    FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
-                );
-                """
-            )
-
         conn.commit()
         print("✅ Tables created successfully.")
 
@@ -418,6 +404,74 @@ async def update_title(request: Request):
     except Exception as e:
         print(f"Error updating title: {e}")
         return {"error": "Failed to update title", "success": False}
+
+@app.post("/add_favorite")
+async def add_favorite(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")
+
+    if not chat_id:
+        return {"error": "Missing chat_id"}
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO favorites (user_id, chat_id) VALUES (%s, %s) ON CONFLICT (user_id, chat_id) DO NOTHING",
+                (user_id, chat_id)
+            )
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        print(f"Error adding favorite: {e}")
+        return {"error": "Failed to add favorite", "success": False}
+
+
+@app.post("/remove_favorite")
+async def remove_favorite(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")
+
+    if not chat_id:
+        return {"error": "Missing chat_id"}
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM favorites WHERE user_id = %s AND chat_id = %s",
+                (user_id, chat_id)
+            )
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        print(f"Error removing favorite: {e}")
+        return {"error": "Failed to remove favorite", "success": False}
+
+
+@app.get("/favorites")
+async def get_favorites(request: Request):
+    user_id = request.query_params.get("user_id", "unknown_user")
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT chat_id FROM favorites WHERE user_id = %s",
+                (user_id,)
+            )
+            favorites = [row[0] for row in cursor.fetchall()]  # Extract chat_ids
+
+        conn.close()
+        return {"favorites": favorites}
+
+    except Exception as e:
+        print(f"Error fetching favorites: {e}")
+        return {"error": "Failed to retrieve favorites", "favorites": []}
 
 @app.get("/chats")
 async def get_chats(request: Request):
