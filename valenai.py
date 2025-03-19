@@ -87,6 +87,20 @@ def create_tables(conn):
                 );
                 """
             )
+
+            # ADD THIS BLOCK: Create the 'favorites' table
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS favorites (
+                    user_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    PRIMARY KEY (user_id, chat_id),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id),
+                    FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+                );
+                """
+            )
+
         conn.commit()
         print("✅ Tables created successfully.")
 
