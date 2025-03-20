@@ -473,6 +473,30 @@ async def get_favorites(request: Request):
         print(f"Error fetching favorites: {e}")
         return {"error": "Failed to retrieve favorites", "favorites": []}
 
+@app.post("/delete_chat")
+async def delete_chat(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")
+
+    if not chat_id:
+        return {"error": "Missing chat_id"}
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            # Delete messages associated with the chat
+            cursor.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
+            # Delete the chat itself
+            cursor.execute("DELETE FROM chats WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+        conn.commit()
+        conn.close()
+        return {"success": True}
+
+    except Exception as e:
+        print(f"Error deleting chat: {e}")
+        return {"error": "Failed to delete chat", "success": False}
+
 @app.get("/chats")
 async def get_chats(request: Request):
     # Extract user_id from query parameters
