@@ -268,87 +268,154 @@ async def chat(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")
     chat_id = data.get("chat_id")  # Get chat ID from frontend
+    message_id = data.get("message_id") # Get message ID
     user_message = data.get("message")
+    is_edit = data.get("edit", False)  # Check for edit flag
+
 
     if not user_message or not chat_id:
         return {"error": "No message or chat ID provided"}
 
     try:
-        model = genai.GenerativeModel(
-           "gemini-2.0-flash",  # Keep your preferred model
-            generation_config={
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "top_k": 40,
-                "max_output_tokens": 8192, # Use your preferred max tokens
-            }
-        )
-
-        # --- Database Operations (LOAD HISTORY) ---
         conn = get_db_connection()
-        with conn.cursor() as cursor:
-            cursor.execute(
+
+        if is_edit:
+            # Handle message editing
+            if not message_id:
+                conn.close()
+                return {"error": "Missing message_id for edit"}
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE messages SET content = %s WHERE message_id = %s AND chat_id = %s AND user_id = %s",
+                    (user_message, message_id, chat_id, user_id)
+                )
+                #Now, we need to delete the AI's previous response.
+                cursor.execute(
+                    "DELETE FROM messages WHERE chat_id = %s AND role = 'bot' AND timestamp > (SELECT timestamp from messages where message_id = %s)",
+                    (chat_id, message_id)
+                )
+
+                # Fetch the updated chat history
+                cursor.execute(
                 "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
                 (chat_id,)
+                )
+                chat_history = [f"{row[0]}: {row[1]}" for row in cursor.fetchall()]
+                # Limit context window
+                chat_history = chat_history[-100:]
+                conn.commit()
+
+            #regenerate prompt
+
+            model = genai.GenerativeModel(
+                "gemini-2.0-flash",  # Keep your preferred model
+                generation_config={
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": 8192, # Use your preferred max tokens
+                }
             )
-            chat_history = [f"{row[0]}: {row[1]}" for row in cursor.fetchall()]
+            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
 
-                    # --- CONTEXT WINDOW LIMIT ---
-        chat_history = chat_history[-100:]  # Keep only the last 100 entries
+            response = model.generate_content(prompt)
 
-        # Append user message to history *before* generating prompt
-        chat_history.append(f"User: {user_message}")
-        prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
+            # Check if response.text exists and is not empty
+            if response.text and not response.text.isspace():
+                bot_reply = remove_markdown(response.text.strip())
+            else:
+                bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
 
-        response = model.generate_content(prompt)
+            # Remove "Valen:" prefix if present
+            bot_reply = bot_reply.replace("Valen:", "").strip()
 
-        # Check if response.text exists and is not empty
-        if response.text and not response.text.isspace():
-            bot_reply = remove_markdown(response.text.strip())
+            with conn.cursor() as cursor:
+                # Insert the bot's reply
+                cursor.execute(
+                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                    (chat_id, user_id, "bot", bot_reply)
+                )
+                conn.commit()
+
+            conn.close()
+            return {"response": bot_reply}
+
         else:
-            bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
-
-        # Remove "Valen:" prefix if present
-        bot_reply = bot_reply.replace("Valen:", "").strip()
-
-
-        # --- Database Operations (SAVE NEW MESSAGES) ---
-        with conn.cursor() as cursor: #Reusing the connection
-            # Insert the user's message
-            cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "user", user_message)
-            )
-            # Insert the bot's reply
-            cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "bot", bot_reply)
+            # We are here if it is not edit, so normal chat
+            model = genai.GenerativeModel(
+                "gemini-2.0-flash",  # Keep your preferred model
+                generation_config={
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": 8192, # Use your preferred max tokens
+                }
             )
 
-        conn.commit()
-        conn.close()
-        return {"response": bot_reply}
+            # --- Database Operations (LOAD HISTORY) ---
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                    (chat_id,)
+                )
+                chat_history = [f"{row[0]}: {row[1]}" for row in cursor.fetchall()]
+
+            # --- CONTEXT WINDOW LIMIT ---
+            chat_history = chat_history[-100:]  # Keep only the last 100 entries
+
+            # Append user message to history *before* generating prompt
+            chat_history.append(f"User: {user_message}")
+            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
+
+            response = model.generate_content(prompt)
+
+            # Check if response.text exists and is not empty
+            if response.text and not response.text.isspace():
+                bot_reply = remove_markdown(response.text.strip())
+            else:
+                bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
+
+            # Remove "Valen:" prefix if present
+            bot_reply = bot_reply.replace("Valen:", "").strip()
+
+
+            # --- Database Operations (SAVE NEW MESSAGES) ---
+            with conn.cursor() as cursor: #Reusing the connection
+                # Insert the user's message
+                cursor.execute(
+                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                    (chat_id, user_id, "user", user_message)
+                )
+                # Insert the bot's reply
+                cursor.execute(
+                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                    (chat_id, user_id, "bot", bot_reply)
+                )
+
+            conn.commit()
+            conn.close()
+            return {"response": bot_reply}
 
     except google_exceptions.ClientError as e:
-        print(f"Gemini API ClientError: {e}")
-        if "invalid API key" in str(e).lower():
-            if len(api_key_queue) > 1:
+        if "invalid API key" in str(e).lower():  # Added more robust error handling
+            if len(api_key_queue) > 1:  #Checks key length
                 print("Switching to the next API key...")
                 api_key_queue.rotate(-1)
                 genai.configure(api_key=get_next_api_key())
-                return await chat(request)  # Retry with new key
+                return await chat(request)
             else:
-                return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
-        elif "quota exceeded" in str(e).lower():
-            if len(api_key_queue) > 1:
-                print("Switching to the next API key (quota exceeded)...")
-                api_key_queue.rotate(-1)
-                genai.configure(api_key=get_next_api_key())
-                return await chat(request)  # Retry with new key
-            else:
-                return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
+                return {"response": "All API keys are exhausted or invalid."} #Handles error
+        elif "quota exceeded" in str(e).lower(): #Rate limit error
+                if len(api_key_queue) > 1: #Checks key length
+                    print("Switching to the next API key (quota exceeded)...")
+                    api_key_queue.rotate(-1)
+                    genai.configure(api_key=get_next_api_key())
+                    return await chat(request) #retries the request.
+                else:
+                    return {"response": "API quota exceeded. Please try again later."} #Handles error
         else:
-            return {"response": "An error occurred while processing your request."}
+                print(f"Gemini API ClientError: {e}") #Prints a message.
+                return {"response": f"An error occurred with the Gemini API: {e}"} #Sends custom message to the user
 
     except Exception as e:
         print(f"Error generating response: {e}")
