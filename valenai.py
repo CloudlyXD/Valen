@@ -495,10 +495,15 @@ async def delete_chat(request: Request):
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # Delete messages associated with the chat
+            # 1. Delete any entries in 'favorites' that refer to this chat
+            cursor.execute("DELETE FROM favorites WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+
+            # 2. Delete messages associated with the chat
             cursor.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
-            # Delete the chat itself
+
+            # 3. Delete the chat itself
             cursor.execute("DELETE FROM chats WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+
         conn.commit()
         conn.close()
         return {"success": True}
