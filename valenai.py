@@ -1,54 +1,64 @@
-from fastapi import FastAPI, Request
+from dotenv import load_dotenv
+import os
+import psycopg2
+import psycopg2.extras
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
-import json
-import os
 import re
 from collections import deque
-from google.api_core import exceptions as google_exceptions
-import requests
-import psycopg2
-import psycopg2.extras  # For using dictionaries with cursors
-import uuid  # Added for generating message IDs
+import uuid
+
+load_dotenv()
 
 app = FastAPI()
+
+# --- CORS Configuration ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later)  
+    allow_origins=["*"],  # Allows all origins
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
-# --- Gemini API Keys ---
+# --- Gemini API Key Configuration ---
 API_KEYS_STRING = os.getenv("GEMINI_API_KEYS")
 if not API_KEYS_STRING:
     raise ValueError("Missing environment variable: GEMINI_API_KEYS")
 API_KEYS = [key.strip() for key in API_KEYS_STRING.split(",") if key.strip()]
 if not API_KEYS:
     raise ValueError("No valid API keys found in GEMINI_API_KEYS")
-
 api_key_queue = deque(API_KEYS)
-
-# --- Database Connection URL ---
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("Missing environment variable: DATABASE_URL")
 
 def get_next_api_key():
     """Rotates and returns the next available API key."""
-    api_key_queue.rotate(-1)
+    api_key_queue.rotate(-1)  # Rotates the queue to the left
     return api_key_queue[0]
 
+# --- Database Connection Function ---
 def get_db_connection():
     """Establishes a connection to the PostgreSQL database."""
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        # Check if running on Railway (RAILWAY_ENVIRONMENT variable is set)
+        if os.getenv("RAILWAY_ENVIRONMENT"):
+            # Use the full DATABASE_URL on Railway
+            conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        else:
+            # Use individual credentials for local development
+            conn = psycopg2.connect(
+                host=os.getenv("DB_HOST"),
+                port=os.getenv("DB_PORT"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+                database=os.getenv("DB_NAME"),
+            )
         return conn
     except Exception as e:
         print(f"❌ Error connecting to the database: {e}")
         raise  # Re-raise the exception to halt execution
 
+# --- Table Creation Function ---
 def create_tables(conn):
     """Creates the necessary tables in the database."""
     try:
@@ -74,7 +84,7 @@ def create_tables(conn):
                 """
             )
 
-            # Create the 'messages' table with message_id as TEXT for UUID
+            # Create the 'messages' table
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -88,255 +98,126 @@ def create_tables(conn):
                 );
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS favorites (
+                    user_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    PRIMARY KEY (user_id, chat_id),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id),
+                    FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+                );
+                """
+            )
         conn.commit()
         print("✅ Tables created successfully.")
 
     except Exception as e:
         print(f"❌ Error creating tables: {e}")
-        conn.rollback()  # Rollback changes if an error occurs
+        conn.rollback()
         raise
 
-# --- Database Connection and Table Creation --- 
-try:
-    conn = get_db_connection()  # Establish the connection
-    create_tables(conn)  # Create tables (if they don't exist)
-except Exception as e:
-    print(f"❌ Application startup failed: {e}")
-    exit(1) # Exit the application if database setup fails
 
-
-genai.configure(api_key=api_key_queue[0])  # Initial API key
-# --- Personality Prompt ---
-PERSONALITY_PROMPT = """
-Conversational Engagement Prompt:
-
-- You're name is Valen. 
-
-- Created by Cloudly (Don't mention this name unless it's explicitly about your creator/developer. Remember, Cloudly is a person.)
-
-You are an advanced AI assistant designed to engage in natural, thoughtful, and highly conversational discussions.  
-Your tone should be warm, insightful, and humanlike—similar to a knowledgeable friend or mentor.  
-Always provide clear, well-reasoned responses while maintaining a casual and engaging tone.  
-Use natural phrasing and avoid overly robotic language.  
-If a question is vague, ask for clarification before answering.  
-
-
-
-
-"""
-
-# --- Helper Functions ---
-def remove_markdown(text):
-    """Removes basic Markdown formatting."""
-    if not text:  # Handle None or empty string
-        return ""
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
-    text = re.sub(r'~~(.*?)~~', r'\1', text)
-    return text
-
-def generate_title(first_message: str) -> str:
-    """Generates a concise but meaningful title for the chat based on the first message."""
-    try:
-        # 1. Truncate very long messages for the title generation prompt
-        truncated_message = first_message[:200] + "..." if len(first_message) > 200 else first_message
-
-        model = genai.GenerativeModel("gemini-2.0-flash")  # Keep the model as specified
-
-        # 2. Improved prompt for better title generation
-        prompt = f"""
-Generate a short, descriptive title for a chat conversation based on this user message:
-"{truncated_message}"
-
-Requirements:
-- Must be between 6-60 characters long
-- Should capture the main topic or question
-- Extract the core subject or question from the message
-- Focus on the main intent or topic, not just repeating words
-- Should be a complete thought/phrase (not cut off)
-- Should be relevant and specific to the content
-- Be specific rather than generic whenever possible
-- Do not include quotation marks in your answer
-- Format as a noun phrase or short statement (not a complete sentence with subject-verb-object)
-- Avoid starting with phrases like "How to" or "Question about" unless necessary
-- If the user sends only greetings like "Hello," "Hi," "Hey," or any other greeting, the chat title should be "Friendly Greeting," "Friendly Assistance Offered," or "Greeting and Assistance." Remember, this naming convention applies only if the user's message consists solely of greetings.
-- Do not include quotation marks or special characters
-
-Just return the title text with no additional explanations or prefixes.
-"""
-
-        response = model.generate_content(prompt)
-        title = response.text.strip()
-
-        # 3. Basic sanitization
-        title = re.sub(r'[^\w\s-]', '', title)  # Remove special characters
-        title = re.sub(r'"', '', title)  # Remove any remaining quotes
-
-        # 4. Ensure title is not empty or too short
-        if not title or len(title) < 6:
-            # Try to extract a meaningful title from the message itself
-            words = first_message.split()
-            if len(words) >= 3:
-                title = " ".join(words[:3])
-            else:
-                title = first_message if first_message else "New Chat"
-
-        # 5. Ensure title doesn't exceed 15 characters but try to keep complete words
-        if len(title) > 60:
-            words = title.split()
-            title = ""
-            for word in words:
-                if len(title + " " + word if title else word) <= 15:
-                    title += " " + word if title else word
-                else:
-                    break
-
-        return title
-    except Exception as e:
-        print(f"Error generating title: {e}")
-        # Fallback: use the first few words of the message
-        words = first_message.split()[:3]
-        fallback_title = " ".join(words)
-        return fallback_title[:60] if fallback_title else "New Chat"
-
-# --- New API route to create chat ---
+# --- API Route to Create a New Chat ---
 @app.post("/create_chat")
 async def create_chat(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")
-    chat_id = data.get("chat_id")  # Must be provided by the frontend
+    chat_id = data.get("chat_id")
     first_message = data.get("message")
 
     if not chat_id or not first_message:
-        return {"error": "Missing chat_id or message"}
+        raise HTTPException(status_code=400, detail="Missing chat_id or message")
 
-    # Generate the title *before* saving any history
     title = generate_title(first_message)
 
-    # Respond with the title *and* the initial bot reply
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            model_name="gemini-1.5-pro-002",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
                 "top_k": 40,
-                "max_output_tokens": 8192,  #Consistent with the model
-            }
+                "max_output_tokens": 8192,
+            },
         )
-        prompt = f"{PERSONALITY_PROMPT}\n\nUser: {first_message}\nAI:" # Initial Prompt
-        response = model.generate_content(prompt)
-        bot_reply = remove_markdown(response.text.strip()) if response.text else "I'm sorry, I couldn't generate a response. Please try again."
-
-        # Remove "Valen:" prefix if present
+        prompt_parts = [PERSONALITY_PROMPT, f"User: {first_message}\nAI:"]
+        response = await model.generate_content_async(prompt_parts)
+        bot_reply = remove_markdown(response.text.strip())
         bot_reply = bot_reply.replace("Valen:", "").strip()
-
-        # --- Database Operations ---
-        conn = get_db_connection()  # Get a database connection
+        conn = get_db_connection()
         with conn.cursor() as cursor:
-            # 1. Insert the user (if they don't exist)
             cursor.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
-
-            # 2. Insert the chat
             cursor.execute("INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)", (chat_id, user_id, title))
-
-            # 3. Insert the user's message
-            user_message_id = str(uuid.uuid4()) # Generate message ID
+            user_message_id = str(uuid.uuid4())
             cursor.execute(
                 "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
-                (user_message_id, chat_id, user_id, "user", first_message)
+                (user_message_id, chat_id, user_id, "user", first_message),
             )
-            # 4. Insert the bot's reply
-            bot_message_id = str(uuid.uuid4()) # Generate message ID
+            bot_message_id = str(uuid.uuid4())
             cursor.execute(
                 "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
-                (bot_message_id, chat_id, user_id, "bot", bot_reply)
+                (bot_message_id, chat_id, user_id, "bot", bot_reply),
             )
-
-        conn.commit()  # Commit the changes
-        conn.close()
-
+            conn.commit()
         return {
             "title": title,
             "response": bot_reply,
-            "user_message_id": user_message_id, # Return message ID
-            "bot_message_id": bot_message_id, # Return message ID
+            "user_message_id": user_message_id,
+            "bot_message_id": bot_message_id,
         }
-
     except Exception as e:
-        print("Error on create_chat", e)
-        return {"title": "New Chat", "response": "I'm sorry, I couldn't process your request. Please try again."}
+        print(f"Error in create_chat: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create chat")
 
-# --- API Route for Web Requests ---
+# --- API Route for Handling Chat Messages ---
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")
-    chat_id = data.get("chat_id")  # Get chat ID from frontend
-    message_id = data.get("message_id") # Get message ID
+    chat_id = data.get("chat_id")
+    message_id = data.get("message_id")
     user_message = data.get("message")
-    is_edit = data.get("edit", False)  # Check for edit flag
-
+    is_edit = data.get("edit", False)
 
     if not user_message or not chat_id:
-        return {"error": "No message or chat ID provided"}
+        raise HTTPException(status_code=400, detail="Missing message or chat ID")
 
     try:
         conn = get_db_connection()
-
         if is_edit:
-            # Handle message editing
-            if not message_id:
-                conn.close()
-                return {"error": "Missing message_id for edit"}
             with conn.cursor() as cursor:
+                if not message_id:
+                    conn.close()
+                    raise HTTPException(status_code=400, detail="Missing message_id for edit")
                 cursor.execute(
                     "UPDATE messages SET content = %s WHERE message_id = %s AND chat_id = %s AND user_id = %s",
                     (user_message, message_id, chat_id, user_id)
                 )
-                #Now, we need to delete the AI's previous response.
-                cursor.execute(
-                    "DELETE FROM messages WHERE chat_id = %s AND role = 'bot' AND timestamp > (SELECT timestamp from messages where message_id = %s)",
-                    (chat_id, message_id)
-                )
+                cursor.execute("DELETE FROM messages WHERE chat_id = %s AND role = 'bot' AND timestamp > (SELECT timestamp from messages where message_id = %s)", (chat_id, message_id))
 
-                # Fetch the updated chat history
-                cursor.execute(
-                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
-                (chat_id,)
-                )
+                cursor.execute("SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC", (chat_id,))
                 chat_history = [f"{row[0]}: {row[1]}" for row in cursor.fetchall()]
-                # Limit context window
-                chat_history = chat_history[-100:]
+                chat_history = chat_history[-100:]  # Limit context window
+
                 conn.commit()
 
-            #regenerate prompt
-
             model = genai.GenerativeModel(
-                "gemini-2.0-flash",  # Keep your preferred model
+                "gemini-1.5-pro-002",
                 generation_config={
                     "temperature": 0.7,
                     "top_p": 0.9,
                     "top_k": 40,
-                    "max_output_tokens": 8192, # Use your preferred max tokens
+                    "max_output_tokens": 8192,
                 }
             )
             prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
+            response = await model.generate_content_async(prompt)
 
-            response = model.generate_content(prompt)
-
-            # Check if response.text exists and is not empty
-            if response.text and not response.text.isspace():
-                bot_reply = remove_markdown(response.text.strip())
-            else:
-                bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
-
-            # Remove "Valen:" prefix if present
+            bot_reply = remove_markdown(response.text.strip())
             bot_reply = bot_reply.replace("Valen:", "").strip()
 
             with conn.cursor() as cursor:
-                # Insert the bot's reply
                 bot_message_id = str(uuid.uuid4())
                 cursor.execute(
                     "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
@@ -345,21 +226,18 @@ async def chat(request: Request):
                 conn.commit()
 
             conn.close()
-            return {"response": bot_reply, "message_id": bot_message_id} # Return ID
-
+            return {"response": bot_reply, "message_id": bot_message_id}
         else:
-            # We are here if it is not edit, so normal chat
+            # Existing chat logic (not an edit)
             model = genai.GenerativeModel(
-                "gemini-2.0-flash",  # Keep your preferred model
+                "gemini-1.5-pro-002",
                 generation_config={
                     "temperature": 0.7,
                     "top_p": 0.9,
                     "top_k": 40,
-                    "max_output_tokens": 8192, # Use your preferred max tokens
+                    "max_output_tokens": 8192,
                 }
             )
-
-            # --- Database Operations (LOAD HISTORY) ---
             with conn.cursor() as cursor:
                 cursor.execute(
                     "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
@@ -367,68 +245,66 @@ async def chat(request: Request):
                 )
                 chat_history = [f"{row[0]}: {row[1]}" for row in cursor.fetchall()]
 
-            # --- CONTEXT WINDOW LIMIT ---
-            chat_history = chat_history[-100:]  # Keep only the last 100 entries
-
-            # Append user message to history *before* generating prompt
+            chat_history = chat_history[-100:]
             chat_history.append(f"User: {user_message}")
             prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
+            response = await model.generate_content_async(prompt)
 
-            response = model.generate_content(prompt)
-
-            # Check if response.text exists and is not empty
-            if response.text and not response.text.isspace():
-                bot_reply = remove_markdown(response.text.strip())
-            else:
-                bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
-
-            # Remove "Valen:" prefix if present
+            bot_reply = remove_markdown(response.text.strip())
             bot_reply = bot_reply.replace("Valen:", "").strip()
 
-
-            # --- Database Operations (SAVE NEW MESSAGES) ---
-            with conn.cursor() as cursor: #Reusing the connection
-                # Insert the user's message
-                user_message_id = str(uuid.uuid4()) # Generate message ID
+            with conn.cursor() as cursor:
+                user_message_id = str(uuid.uuid4())
                 cursor.execute(
                     "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
                     (user_message_id, chat_id, user_id, "user", user_message)
                 )
-                # Insert the bot's reply
-                bot_message_id = str(uuid.uuid4()) # Generate message ID
+                bot_message_id = str(uuid.uuid4())
                 cursor.execute(
                     "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
                     (bot_message_id, chat_id, user_id, "bot", bot_reply)
                 )
-
-            conn.commit()
-            conn.close()
-            return {"response": bot_reply, "message_id": bot_message_id} # Return ID
+                conn.commit()
+            return {"response": bot_reply, "message_id": bot_message_id}
 
     except google_exceptions.ClientError as e:
-        if "invalid API key" in str(e).lower():  # Added more robust error handling
-            if len(api_key_queue) > 1:  #Checks key length
+        print(f"Gemini API ClientError: {e}")
+        if "invalid API key" in str(e).lower():
+            if len(api_key_queue) > 1:
                 print("Switching to the next API key...")
                 api_key_queue.rotate(-1)
                 genai.configure(api_key=get_next_api_key())
-                return await chat(request)
+                return await chat(request)  # Retry with new key
             else:
-                return {"response": "All API keys are exhausted or invalid."} #Handles error
-        elif "quota exceeded" in str(e).lower(): #Rate limit error
-                if len(api_key_queue) > 1: #Checks key length
-                    print("Switching to the next API key (quota exceeded)...")
-                    api_key_queue.rotate(-1)
-                    genai.configure(api_key=get_next_api_key())
-                    return await chat(request) #retries the request.
-                else:
-                    return {"response": "API quota exceeded. Please try again later."} #Handles error
+                return {"response": "All API keys are exhausted or invalid."}
+        elif "429" in str(e):  # More general rate limit check
+            return {"response": "API quota exceeded. Please try again later."}
         else:
-                print(f"Gemini API ClientError: {e}") #Prints a message.
-                return {"response": f"An error occurred with the Gemini API: {e}"} #Sends custom message to the user
-
+            return {"response": f"An error occurred with the Gemini API: {e}"}
     except Exception as e:
         print(f"Error generating response: {e}")
         return {"response": "An error occurred while generating a response."}
+
+@app.get("/chats")
+async def get_chats(request: Request):
+    # Extract user_id from query parameters
+    user_id = request.query_params.get("user_id", "unknown_user")
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:  # Using DictCursor
+            cursor.execute(
+                "SELECT chat_id, title FROM chats WHERE user_id = %s ORDER BY chat_id DESC",  # Sort newest first
+                (user_id,)
+            )
+            chats = [{"id": row["chat_id"], "title": row["title"]} for row in cursor.fetchall()]
+
+        conn.close()
+        return {"chats": chats}
+
+    except Exception as e:
+        print(f"Error fetching chats: {e}")
+        return {"error": "Failed to retrieve chats", "chats": []}
 
 @app.post("/chat_history")
 async def get_chat_history(request: Request):
@@ -487,7 +363,6 @@ async def update_title(request: Request):
     except Exception as e:
         print(f"Error updating title: {e}")
         return {"error": "Failed to update title", "success": False}
-
 @app.post("/add_favorite")
 async def add_favorite(request: Request):
     data = await request.json()
@@ -585,25 +460,77 @@ async def delete_chat(request: Request):
         print(f"Error deleting chat: {e}")
         return {"error": "Failed to delete chat", "success": False}
 
-@app.get("/chats")
-async def get_chats(request: Request):
-    # Extract user_id from query parameters
-    user_id = request.query_params.get("user_id", "unknown_user")
-    try:
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:  # Using DictCursor for cleaner code
-            cursor.execute(
-                "SELECT chat_id, title FROM chats WHERE user_id = %s ORDER BY chat_id DESC",  # Sort newest first
-                (user_id,)
-            )
-            chats = [{"id": row["chat_id"], "title": row["title"]} for row in cursor.fetchall()]
-        conn.close()
-        return {"chats": chats}
-    except Exception as e:
-        print(f"Error fetching chats: {e}")
-        return {"error": "Failed to retrieve chats", "chats": []}
+# --- Utility Functions ---
 
-# --- Run the API ---
+def remove_markdown(text):
+    """Removes basic Markdown formatting from text."""
+    if not text:
+        return ""
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Bold
+    text = re.sub(r'\*(.*?)\*', r'\1', text)      # Italics
+    text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)  # Underline/Italics
+    text = re.sub(r'~~(.*?)~~', r'\1', text)     # Strikethrough
+    return text
+
+# --- Gemini Prompt Engineering ---
+PERSONALITY_PROMPT = """
+Conversational Engagement Prompt:
+
+- You are Valen, an AI assistant created by Cloudly.
+
+- Your primary goal is to provide engaging, informative, and helpful conversations.
+- Be friendly, personable, and adopt the persona of a knowledgeable assistant.
+- Maintain a consistent tone and style throughout the conversation.
+- Do not mention Cloudly unless specifically asked, but always be ready to identify yourself and your creator.
+"""
+
+def generate_title(first_message: str) -> str:
+    """Generates a concise but meaningful title for the chat based on the first message."""
+    try:
+        truncated_message = first_message[:200] + "..." if len(first_message) > 200 else first_message
+
+        model = genai.GenerativeModel("gemini-1.5-pro-002")
+
+        prompt = f"""
+Generate a short, descriptive title for a chat conversation based on this user message:
+"{truncated_message}"
+
+Requirements:
+- Must be between 4-15 characters long
+- Should capture the main topic or question
+- Extract the core subject or question from the message
+- Focus on the main intent or topic, not just repeating words
+- Should be a complete thought/phrase (not cut off)
+- Should be relevant and specific to the content
+- Be specific rather than generic whenever possible
+- Do not include quotation marks in your answer
+- Format as a noun phrase or short statement (not a complete sentence with subject-verb-object)
+- Avoid starting with phrases like "How to" or "Question about" unless necessary
+- If the user sends only greetings like "Hello," "Hi," "Hey," or any other greeting, the chat title should be "Friendly Greeting" or "Assistance offered."
+- Do not include quotation marks or special characters
+
+Just return the title text with no additional explanations or prefixes.
+"""
+        response = model.generate_content(prompt)
+        title = response.text.strip()
+        title = re.sub(r'[^\w\s-]', '', title)
+        title = re.sub(r'"', '', title)
+
+        if not title or len(title) < 4:
+            words = first_message.split()
+            if len(words) >= 2:
+                title = " ".join(words[:2])
+            else:
+                title = first_message if first_message else "New Chat"
+        return title[:15].strip()
+
+    except Exception as e:
+        print(f"Error generating title: {e}")
+        words = first_message.split()[:3]
+        fallback_title = " ".join(words)
+        return fallback_title[:15] if fallback_title else "New Chat"
+
+# --- Run the API with Uvicorn ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
