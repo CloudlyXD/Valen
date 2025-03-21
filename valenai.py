@@ -9,6 +9,7 @@ from google.api_core import exceptions as google_exceptions
 import requests
 import psycopg2
 import psycopg2.extras  # For using dictionaries with cursors
+import uuid  # Added for generating message IDs
 
 app = FastAPI()
 app.add_middleware(
@@ -73,11 +74,11 @@ def create_tables(conn):
                 """
             )
 
-            # Create the 'messages' table
+            # Create the 'messages' table with message_id as TEXT for UUID
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
-                    message_id SERIAL PRIMARY KEY,
+                    message_id TEXT PRIMARY KEY,
                     chat_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     role TEXT NOT NULL,
@@ -221,7 +222,7 @@ async def create_chat(request: Request):
                 "temperature": 0.7,
                 "top_p": 0.9,
                 "top_k": 40,
-                "max_output_tokens": 1024,
+                "max_output_tokens": 8192,  #Consistent with the model
             }
         )
         prompt = f"{PERSONALITY_PROMPT}\n\nUser: {first_message}\nAI:" # Initial Prompt
@@ -230,7 +231,6 @@ async def create_chat(request: Request):
 
         # Remove "Valen:" prefix if present
         bot_reply = bot_reply.replace("Valen:", "").strip()
-
 
         # --- Database Operations ---
         conn = get_db_connection()  # Get a database connection
@@ -242,25 +242,31 @@ async def create_chat(request: Request):
             cursor.execute("INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)", (chat_id, user_id, title))
 
             # 3. Insert the user's message
+            user_message_id = str(uuid.uuid4()) # Generate message ID
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "user", first_message)
+                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                (user_message_id, chat_id, user_id, "user", first_message)
             )
             # 4. Insert the bot's reply
+            bot_message_id = str(uuid.uuid4()) # Generate message ID
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "bot", bot_reply)
+                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                (bot_message_id, chat_id, user_id, "bot", bot_reply)
             )
 
         conn.commit()  # Commit the changes
         conn.close()
 
-        return {"title": title, "response": bot_reply}  # Return title and AI reply
+        return {
+            "title": title,
+            "response": bot_reply,
+            "user_message_id": user_message_id, # Return message ID
+            "bot_message_id": bot_message_id, # Return message ID
+        }
 
     except Exception as e:
         print("Error on create_chat", e)
         return {"title": "New Chat", "response": "I'm sorry, I couldn't process your request. Please try again."}
-
 
 # --- API Route for Web Requests ---
 @app.post("/chat")
@@ -331,14 +337,15 @@ async def chat(request: Request):
 
             with conn.cursor() as cursor:
                 # Insert the bot's reply
+                bot_message_id = str(uuid.uuid4())
                 cursor.execute(
-                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                    (chat_id, user_id, "bot", bot_reply)
+                    "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                    (bot_message_id, chat_id, user_id, "bot", bot_reply)
                 )
                 conn.commit()
 
             conn.close()
-            return {"response": bot_reply}
+            return {"response": bot_reply, "message_id": bot_message_id} # Return ID
 
         else:
             # We are here if it is not edit, so normal chat
@@ -382,19 +389,21 @@ async def chat(request: Request):
             # --- Database Operations (SAVE NEW MESSAGES) ---
             with conn.cursor() as cursor: #Reusing the connection
                 # Insert the user's message
+                user_message_id = str(uuid.uuid4()) # Generate message ID
                 cursor.execute(
-                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                    (chat_id, user_id, "user", user_message)
+                    "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                    (user_message_id, chat_id, user_id, "user", user_message)
                 )
                 # Insert the bot's reply
+                bot_message_id = str(uuid.uuid4()) # Generate message ID
                 cursor.execute(
-                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                    (chat_id, user_id, "bot", bot_reply)
+                    "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                    (bot_message_id, chat_id, user_id, "bot", bot_reply)
                 )
 
             conn.commit()
             conn.close()
-            return {"response": bot_reply}
+            return {"response": bot_reply, "message_id": bot_message_id} # Return ID
 
     except google_exceptions.ClientError as e:
         if "invalid API key" in str(e).lower():  # Added more robust error handling
@@ -432,22 +441,19 @@ async def get_chat_history(request: Request):
 
     try:
         conn = get_db_connection()
-        with conn.cursor() as cursor:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor: # Use RealDictCursor
             cursor.execute(
-                "SELECT role, content, timestamp FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                "SELECT message_id, role, content, timestamp FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
                 (chat_id,)
             )
-            # Fetch all results
-            results = cursor.fetchall()
-
-            # Format as a list of dictionaries
+            # Fetch all results and format as a list of dictionaries
             history = []
-            for row in results:
-                role, content, timestamp = row  # Unpack the tuple
+            for row in cursor.fetchall():
                 history.append({
-                    "role": role,
-                    "content": content,
-                    "timestamp": timestamp.isoformat()  # Convert to ISO format
+                    "message_id": row["message_id"],  # Include message_id
+                    "role": row["role"],
+                    "content": row["content"],
+                    "timestamp": row["timestamp"].isoformat()  # Convert to ISO format
                 })
 
         conn.close()
