@@ -549,6 +549,7 @@ async def edit_message(request: Request):
             )
             result = cursor.fetchone()
             if not result:
+                print(f"Message not found for chat_id={chat_id}, message_id={message_id}, user_id={user_id}")
                 return {"error": "Message not found or not updated", "success": False}
 
             original_timestamp = result[0]
@@ -559,7 +560,11 @@ async def edit_message(request: Request):
                 (new_content, original_timestamp, chat_id, message_id, user_id)
             )
 
-            if cursor.rowcount == 0:
+            rows_updated = cursor.rowcount
+            print(f"Rows updated in edit_message: {rows_updated} for chat_id={chat_id}, message_id={message_id}")
+
+            if rows_updated == 0:
+                print(f"No rows updated for chat_id={chat_id}, message_id={message_id}, user_id={user_id}")
                 return {"error": "Message not found or not updated", "success": False}
 
         conn.commit()
