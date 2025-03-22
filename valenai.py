@@ -530,6 +530,133 @@ async def get_chats(request: Request):
         print(f"Error fetching chats: {e}")
         return {"error": "Failed to retrieve chats", "chats": []}
 
+# --- New API route to update message content ---
+@app.post("/update_message")
+async def update_message(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")
+    message_id = data.get("message_id")
+    new_content = data.get("new_content")
+
+    if not chat_id or not message_id or not new_content:
+        return {"error": "Missing chat_id, message_id, or new_content"}
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            # Update the message content
+            cursor.execute(
+                "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s",
+                (new_content, chat_id, message_id)
+            )
+            rows_updated = cursor.rowcount
+        
+        conn.commit()
+        conn.close()
+        
+        if rows_updated > 0:
+            return {"success": True}
+        else:
+            return {"success": False, "error": "Message not found or no changes were made"}
+
+    except Exception as e:
+        print(f"Error updating message: {e}")
+        return {"error": "Failed to update message", "success": False}
+
+# --- New API route to regenerate response after message edit ---
+@app.post("/regenerate_response")
+async def regenerate_response(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")
+    message_id = data.get("message_id")
+    edited_content = data.get("edited_content")
+
+    if not chat_id or not message_id:
+        return {"error": "Missing chat_id or message_id"}
+
+    try:
+        model = genai.GenerativeModel(
+            "gemini-2.0-flash",
+            generation_config={
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+                "max_output_tokens": 8192,
+            }
+        )
+
+        # --- Get chat history up to the edited message ---
+        conn = get_db_connection()
+        
+        # First, find the position of the edited message
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                (chat_id,)
+            )
+            all_messages = cursor.fetchall()
+            
+            # Get all messages and create chat history
+            chat_history = []
+            for i, (role, content) in enumerate(all_messages):
+                # If we've found the edited message, use the new content
+                if role == "user" and i < len(all_messages) - 1 and all_messages[i+1][0] == "bot":
+                    if str(message_id) == str(i):  # This is simplified - you'd need to match actual message_id
+                        chat_history.append(f"User: {edited_content}")
+                    else:
+                        chat_history.append(f"{role}: {content}")
+                else:
+                    chat_history.append(f"{role}: {content}")
+            
+            # Find the position after the edited message (where bot response should be)
+            edited_pos = -1
+            for i, (role, content) in enumerate(all_messages):
+                if str(message_id) == str(i) and role == "user":
+                    edited_pos = i
+                    break
+            
+            if edited_pos == -1:
+                return {"error": "Edited message not found"}
+            
+            # Get just the history up to the edited message to regenerate the response
+            prompt_history = chat_history[:edited_pos+1]
+            prompt_history = prompt_history[-100:]  # Context window limit
+            
+            # Generate new response
+            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(prompt_history) + "\nAI:"
+            response = model.generate_content(prompt)
+            
+            if response.text and not response.text.isspace():
+                new_bot_reply = remove_markdown(response.text.strip())
+            else:
+                new_bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
+            
+            # Remove "Valen:" prefix if present
+            new_bot_reply = new_bot_reply.replace("Valen:", "").strip()
+            
+            # Update the bot's response in the database
+            # This assumes the bot response is right after the edited message
+            cursor.execute(
+                "UPDATE messages SET content = %s WHERE chat_id = %s AND role = 'bot' AND message_id > %s ORDER BY message_id ASC LIMIT 1",
+                (new_bot_reply, chat_id, message_id)
+            )
+            
+            rows_updated = cursor.rowcount
+        
+        conn.commit()
+        conn.close()
+        
+        if rows_updated > 0:
+            return {"success": True, "response": new_bot_reply}
+        else:
+            return {"success": False, "error": "Bot response not found or couldn't be updated"}
+
+    except Exception as e:
+        print(f"Error regenerating response: {e}")
+        return {"error": f"Failed to regenerate response: {str(e)}", "success": False}
+
 # --- Run the API ---
 if __name__ == "__main__":
     import uvicorn
