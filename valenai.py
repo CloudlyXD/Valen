@@ -669,35 +669,14 @@ async def edit_message(request: Request):
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # First get the timestamp of message, that user wants to edit.
+            # Update the message content using the message_id directly
             cursor.execute(
-                "SELECT timestamp FROM messages WHERE chat_id = %s and role = 'user' and content = %s ORDER BY timestamp",
-                (chat_id, user_message)
-            )
-            
-            result = cursor.fetchone()
-            
-            # If there is no such message
-            if result is None:
-              return {"error": "Message not found or not updated.", "success": False}
-
-            timestamp = result[0]
-
-            # Get the count of messages from that timestamp
-            cursor.execute(
-                "SELECT COUNT(*) FROM messages WHERE chat_id = %s AND timestamp <= %s",
-                (chat_id, timestamp)
-            )
-            count = cursor.fetchone()[0]
-
-            # Now we know the message id of database.
-            cursor.execute(
-                "UPDATE messages SET content = %s WHERE message_id = %s",
-                (new_content, count)
+                "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s AND user_id = %s AND role = 'user'",
+                (new_content, chat_id, message_id, user_id)
             )
 
-            if cursor.rowcount == 0: # Check if updated
-              return {"error": "Message not found or not updated.", "success": False}
+            if cursor.rowcount == 0:  # Check if any rows were updated
+                return {"error": "Message not found or not updated", "success": False}
 
         conn.commit()
         conn.close()
