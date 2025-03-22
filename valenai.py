@@ -14,7 +14,7 @@ import logging  # Added for debugging
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later)   
+    allow_origins=["*"],  # Allow requests from anywhere (you can restrict this later)    
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
