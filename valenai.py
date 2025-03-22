@@ -77,7 +77,7 @@ def create_tables(conn):
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
-                    message_id SERIAL PRIMARY KEY,
+                    message_id TEXT PRIMARY KEY,
                     chat_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     role TEXT NOT NULL,
@@ -243,13 +243,13 @@ async def create_chat(request: Request):
 
             # 3. Insert the user's message
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "user", first_message)
+                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                (Date.now().toString(), chat_id, user_id, "user", first_message)
             )
             # 4. Insert the bot's reply
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "bot", bot_reply)
+                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                (Date.now().toString(), chat_id, user_id, "bot", bot_reply)
             )
 
         conn.commit()  # Commit the changes
@@ -316,13 +316,13 @@ async def chat(request: Request):
         with conn.cursor() as cursor: #Reusing the connection
             # Insert the user's message
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "user", user_message)
+                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                (Date.now().toString(), chat_id, user_id, "user", user_message)
             )
             # Insert the bot's reply
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "bot", bot_reply)
+                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
+                (Date.now().toString(), chat_id, user_id, "bot", bot_reply)
             )
 
         conn.commit()
@@ -567,7 +567,7 @@ async def regenerate_response(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")
     chat_id = data.get("chat_id")
-    message_id = data.get("message_id")
+    message_id = data.get("message_id") #message id of user message
     edited_content = data.get("edited_content")
 
     if not chat_id or not message_id:
@@ -589,36 +589,38 @@ async def regenerate_response(request: Request):
         
         # First, find the position of the edited message
         with conn.cursor() as cursor:
+            #Get all messages from database.
             cursor.execute(
-                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                "SELECT role, content, message_id FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
                 (chat_id,)
             )
             all_messages = cursor.fetchall()
-            
-            # Get all messages and create chat history
-            chat_history = []
-            for i, (role, content) in enumerate(all_messages):
-                # If we've found the edited message, use the new content
-                if role == "user" and i < len(all_messages) - 1 and all_messages[i+1][0] == "bot":
-                    if str(message_id) == str(i):  # This is simplified - you'd need to match actual message_id
-                        chat_history.append(f"User: {edited_content}")
-                    else:
-                        chat_history.append(f"{role}: {content}")
-                else:
-                    chat_history.append(f"{role}: {content}")
-            
-            # Find the position after the edited message (where bot response should be)
+
+            #Find the position of user and bot message.
             edited_pos = -1
-            for i, (role, content) in enumerate(all_messages):
-                if str(message_id) == str(i) and role == "user":
-                    edited_pos = i
-                    break
+            bot_pos = -1
+            for i, (role, content, db_message_id) in enumerate(all_messages):
+              if str(message_id) == str(db_message_id) and role == "user":
+                edited_pos = i
+              elif edited_pos != -1 and role == "bot":
+                bot_pos = i
+                break
             
             if edited_pos == -1:
                 return {"error": "Edited message not found"}
+            if bot_pos == -1:
+              return {"error": "Bot response not found"}
+
+            # Get all messages and create chat history
+            chat_history = []
+            for i, (role, content, db_message_id) in enumerate(all_messages):
+                if i == edited_pos:
+                    chat_history.append(f"User: {edited_content}")
+                elif i != bot_pos: #Except the bot reply.
+                    chat_history.append(f"{role}: {content}")
             
             # Get just the history up to the edited message to regenerate the response
-            prompt_history = chat_history[:edited_pos+1]
+            prompt_history = chat_history
             prompt_history = prompt_history[-100:]  # Context window limit
             
             # Generate new response
@@ -633,11 +635,13 @@ async def regenerate_response(request: Request):
             # Remove "Valen:" prefix if present
             new_bot_reply = new_bot_reply.replace("Valen:", "").strip()
             
+            #Get bot message id from db.
+            bot_message_id = all_messages[bot_pos][2]
+
             # Update the bot's response in the database
-            # This assumes the bot response is right after the edited message
             cursor.execute(
-                "UPDATE messages SET content = %s WHERE chat_id = %s AND role = 'bot' AND message_id > %s ORDER BY message_id ASC LIMIT 1",
-                (new_bot_reply, chat_id, message_id)
+                "UPDATE messages SET content = %s WHERE message_id = %s",
+                (new_bot_reply, bot_message_id)
             )
             
             rows_updated = cursor.rowcount
@@ -660,7 +664,7 @@ async def edit_message(request: Request):
     data = await request.json()
     user_id = data.get("user_id")
     chat_id = data.get("chat_id")
-    message_id = data.get("message_id")  # This should be the message ID
+    message_id = data.get("message_id")  # Get the message_id directly
     new_content = data.get("new_content")
 
     if not user_id or not chat_id or not message_id or new_content is None:
@@ -669,35 +673,14 @@ async def edit_message(request: Request):
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # First get the timestamp of message, that user wants to edit.
+            # Use the message_id in the WHERE clause!  This is the key change.
             cursor.execute(
-                "SELECT timestamp FROM messages WHERE chat_id = %s and role = 'user' and content = %s ORDER BY timestamp",
-                (chat_id, user_message)
-            )
-            
-            result = cursor.fetchone()
-            
-            # If there is no such message
-            if result is None:
-              return {"error": "Message not found or not updated.", "success": False}
-
-            timestamp = result[0]
-
-            # Get the count of messages from that timestamp
-            cursor.execute(
-                "SELECT COUNT(*) FROM messages WHERE chat_id = %s AND timestamp <= %s",
-                (chat_id, timestamp)
-            )
-            count = cursor.fetchone()[0]
-
-            # Now we know the message id of database.
-            cursor.execute(
-                "UPDATE messages SET content = %s WHERE message_id = %s",
-                (new_content, count)
+                "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s AND user_id = %s",
+                (new_content, chat_id, message_id, user_id) # Added user_id for safety
             )
 
-            if cursor.rowcount == 0: # Check if updated
-              return {"error": "Message not found or not updated.", "success": False}
+            if cursor.rowcount == 0:  # Check if updated
+                return {"error": "Message not found or not updated.", "success": False}
 
         conn.commit()
         conn.close()
