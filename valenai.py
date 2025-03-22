@@ -667,7 +667,7 @@ async def edit_message(request: Request):
     new_content = data.get("new_content")
 
     if not user_id or not chat_id or not message_id or new_content is None:  # Include check for None
-        return {"error": "Missing user_id, chat_id, message_id, or new_content"}
+        return {"error": "Missing user_id, chat_id, message_id, or new_content", "success": False}
 
     try:
         conn = get_db_connection()
@@ -676,12 +676,12 @@ async def edit_message(request: Request):
                 "UPDATE messages SET content = %s WHERE message_id = %s AND chat_id = %s AND user_id = %s",
                 (new_content, message_id, chat_id, user_id)
             )
+            
+            if cursor.rowcount == 0: # Check if updated
+                return {"error": "Message not found or not updated.", "success": False}
+                
         conn.commit()
         conn.close()
-
-        if cursor.rowcount == 0: # Check if updated
-          return {"error": "Message not found or not updated.", "success": False}
-
         return {"success": True}
 
     except Exception as e:
