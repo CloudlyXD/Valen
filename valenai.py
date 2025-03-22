@@ -357,7 +357,7 @@ async def chat(request: Request):
 @app.post("/chat_history")
 async def get_chat_history(request: Request):
     data = await request.json()
-    user_id = data.get("user_id", "unknown_user")  # Although not used in the query, it's good practice
+    user_id = data.get("user_id", "unknown_user")
     chat_id = data.get("chat_id")
 
     if not chat_id:
@@ -367,20 +367,17 @@ async def get_chat_history(request: Request):
         conn = get_db_connection()
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT role, content, timestamp FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                "SELECT message_id, role, content, timestamp FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
                 (chat_id,)
             )
-            # Fetch all results
-            results = cursor.fetchall()
-
-            # Format as a list of dictionaries
             history = []
-            for row in results:
-                role, content, timestamp = row  # Unpack the tuple
+            for row in cursor.fetchall():
+                message_id, role, content, timestamp = row  # Unpack all values
                 history.append({
+                    "message_id": message_id,  # Include message_id
                     "role": role,
                     "content": content,
-                    "timestamp": timestamp.isoformat()  # Convert to ISO format
+                    "timestamp": timestamp.isoformat()
                 })
 
         conn.close()
@@ -663,23 +660,45 @@ async def edit_message(request: Request):
     data = await request.json()
     user_id = data.get("user_id")
     chat_id = data.get("chat_id")
-    message_id = data.get("message_id")
+    message_id = data.get("message_id")  # This should be the message ID
     new_content = data.get("new_content")
 
-    if not user_id or not chat_id or not message_id or new_content is None:  # Include check for None
+    if not user_id or not chat_id or not message_id or new_content is None:
         return {"error": "Missing user_id, chat_id, message_id, or new_content", "success": False}
 
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
+            # First get the timestamp of message, that user wants to edit.
             cursor.execute(
-                "UPDATE messages SET content = %s WHERE message_id = %s AND chat_id = %s AND user_id = %s",
-                (new_content, message_id, chat_id, user_id)
+                "SELECT timestamp FROM messages WHERE chat_id = %s and role = 'user' and content = %s ORDER BY timestamp",
+                (chat_id, user_message)
             )
             
+            result = cursor.fetchone()
+            
+            # If there is no such message
+            if result is None:
+              return {"error": "Message not found or not updated.", "success": False}
+
+            timestamp = result[0]
+
+            # Get the count of messages from that timestamp
+            cursor.execute(
+                "SELECT COUNT(*) FROM messages WHERE chat_id = %s AND timestamp <= %s",
+                (chat_id, timestamp)
+            )
+            count = cursor.fetchone()[0]
+
+            # Now we know the message id of database.
+            cursor.execute(
+                "UPDATE messages SET content = %s WHERE message_id = %s",
+                (new_content, count)
+            )
+
             if cursor.rowcount == 0: # Check if updated
-                return {"error": "Message not found or not updated.", "success": False}
-                
+              return {"error": "Message not found or not updated.", "success": False}
+
         conn.commit()
         conn.close()
         return {"success": True}
