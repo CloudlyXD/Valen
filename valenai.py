@@ -597,7 +597,7 @@ async def regenerate_response(request: Request):
         conn = get_db_connection()
         
         with conn.cursor() as cursor:
-            # Fetch the timestamp of the edited message
+            # Fetch the timestamp of the edited message (for chat history)
             cursor.execute(
                 "SELECT timestamp FROM messages WHERE chat_id = %s AND message_id = %s",
                 (chat_id, message_id)
@@ -651,12 +651,12 @@ async def regenerate_response(request: Request):
             # Remove "Valen:" prefix if present
             new_bot_reply = new_bot_reply.replace("Valen:", "").strip()
             
-            # Delete the old bot message (if it exists) after the edited message
+            # Delete all bot messages after the edited message
             cursor.execute(
-                "DELETE FROM messages WHERE chat_id = %s AND role = 'bot' AND timestamp > %s AND message_id > %s",
-                (chat_id, edited_timestamp, message_id)
+                "DELETE FROM messages WHERE chat_id = %s AND role = 'bot' AND message_id > %s",
+                (chat_id, message_id)
             )
-            print(f"Deleted old bot messages after message_id {message_id} and timestamp {edited_timestamp}")
+            print(f"Deleted old bot messages after message_id {message_id}")
             
             # Insert a new bot message
             cursor.execute(
