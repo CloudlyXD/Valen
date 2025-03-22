@@ -584,45 +584,39 @@ async def regenerate_response(request: Request):
             }
         )
 
-        # --- Get chat history up to the edited message ---
+        # Get chat history up to the edited message
         conn = get_db_connection()
         
-        # First, find the position of the edited message
         with conn.cursor() as cursor:
+            # Fetch all messages up to and including the edited message
             cursor.execute(
-                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
-                (chat_id,)
+                "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id <= %s ORDER BY timestamp ASC",
+                (chat_id, message_id)
             )
-            all_messages = cursor.fetchall()
+            messages_up_to_edit = cursor.fetchall()
             
-            # Get all messages and create chat history
+            # Build the chat history, replacing the edited message's content
             chat_history = []
-            for i, (role, content) in enumerate(all_messages):
-                # If we've found the edited message, use the new content
-                if role == "user" and i < len(all_messages) - 1 and all_messages[i+1][0] == "bot":
-                    if str(message_id) == str(i):  # This is simplified - you'd need to match actual message_id
-                        chat_history.append(f"User: {edited_content}")
-                    else:
-                        chat_history.append(f"{role}: {content}")
+            for msg_id, role, content in messages_up_to_edit:
+                if str(msg_id) == str(message_id):
+                    chat_history.append(f"User: {edited_content}")
                 else:
                     chat_history.append(f"{role}: {content}")
             
-            # Find the position after the edited message (where bot response should be)
-            edited_pos = -1
-            for i, (role, content) in enumerate(all_messages):
-                if str(message_id) == str(i) and role == "user":
-                    edited_pos = i
-                    break
+            # Ensure the edited message exists and is a user message
+            cursor.execute(
+                "SELECT role FROM messages WHERE chat_id = %s AND message_id = %s",
+                (chat_id, message_id)
+            )
+            result = cursor.fetchone()
+            if not result or result[0] != "user":
+                return {"error": "Edited message not found or not a user message"}
             
-            if edited_pos == -1:
-                return {"error": "Edited message not found"}
-            
-            # Get just the history up to the edited message to regenerate the response
-            prompt_history = chat_history[:edited_pos+1]
-            prompt_history = prompt_history[-100:]  # Context window limit
+            # Limit the context window
+            chat_history = chat_history[-100:]
             
             # Generate new response
-            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(prompt_history) + "\nAI:"
+            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
             response = model.generate_content(prompt)
             
             if response.text and not response.text.isspace():
@@ -633,8 +627,7 @@ async def regenerate_response(request: Request):
             # Remove "Valen:" prefix if present
             new_bot_reply = new_bot_reply.replace("Valen:", "").strip()
             
-            # Update the bot's response in the database
-            # This assumes the bot response is right after the edited message
+            # Update the bot's response in the database (the next bot message after the edited message)
             cursor.execute(
                 "UPDATE messages SET content = %s WHERE chat_id = %s AND role = 'bot' AND message_id > %s ORDER BY message_id ASC LIMIT 1",
                 (new_bot_reply, chat_id, message_id)
