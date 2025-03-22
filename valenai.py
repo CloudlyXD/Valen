@@ -673,7 +673,7 @@ async def edit_message(request: Request):
             # Use message_id in the WHERE clause
             cursor.execute(
                 "UPDATE messages SET content = %s WHERE message_id = %s AND user_id = %s AND chat_id = %s",
-                (new_content, message_id, user_id, chat_id)  # Use message_id, and add user_id, chat_id for extra safety
+                (new_content, int(message_id), user_id, chat_id)  # Convert message_id to integer
             )
 
             if cursor.rowcount == 0:
