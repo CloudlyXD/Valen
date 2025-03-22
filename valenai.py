@@ -588,12 +588,25 @@ async def regenerate_response(request: Request):
         conn = get_db_connection()
         
         with conn.cursor() as cursor:
+            # Fetch the timestamp of the edited message
+            cursor.execute(
+                "SELECT timestamp FROM messages WHERE chat_id = %s AND message_id = %s",
+                (chat_id, message_id)
+            )
+            edited_message = cursor.fetchone()
+            if not edited_message:
+                print(f"Edited message not found: message_id={message_id}")
+                return {"error": "Edited message not found"}
+
+            edited_timestamp = edited_message[0]
+            
             # Fetch all messages up to and including the edited message
             cursor.execute(
                 "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id <= %s ORDER BY timestamp ASC",
                 (chat_id, message_id)
             )
             messages_up_to_edit = cursor.fetchall()
+            print(f"Messages up to edit (message_id {message_id}): {messages_up_to_edit}")  # Add logging
             
             # Build the chat history, replacing the edited message's content
             chat_history = []
@@ -610,10 +623,12 @@ async def regenerate_response(request: Request):
             )
             result = cursor.fetchone()
             if not result or result[0] != "user":
+                print(f"Edited message not found or not a user message: message_id={message_id}")  # Add logging
                 return {"error": "Edited message not found or not a user message"}
             
             # Limit the context window
             chat_history = chat_history[-100:]
+            print(f"Chat history for prompt: {chat_history}")  # Add logging
             
             # Generate new response
             prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
@@ -627,13 +642,27 @@ async def regenerate_response(request: Request):
             # Remove "Valen:" prefix if present
             new_bot_reply = new_bot_reply.replace("Valen:", "").strip()
             
-            # Update the bot's response in the database (the next bot message after the edited message)
+            # Find the bot message to update (the next bot message after the edited message by timestamp)
             cursor.execute(
-                "UPDATE messages SET content = %s WHERE chat_id = %s AND role = 'bot' AND message_id > %s ORDER BY message_id ASC LIMIT 1",
-                (new_bot_reply, chat_id, message_id)
+                "SELECT message_id FROM messages WHERE chat_id = %s AND role = 'bot' AND timestamp > %s ORDER BY timestamp ASC LIMIT 1",
+                (chat_id, edited_timestamp)
+            )
+            bot_message = cursor.fetchone()
+            if not bot_message:
+                print(f"No bot message found after timestamp {edited_timestamp}")  # Add logging
+                return {"success": False, "error": "No bot message found to update"}
+            
+            bot_message_id = bot_message[0]
+            print(f"Updating bot message with message_id {bot_message_id} with new content: {new_bot_reply}")  # Add logging
+            
+            # Update the bot's response in the database
+            cursor.execute(
+                "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s",
+                (new_bot_reply, chat_id, bot_message_id)
             )
             
             rows_updated = cursor.rowcount
+            print(f"Rows updated: {rows_updated}")  # Add logging
         
         conn.commit()
         conn.close()
