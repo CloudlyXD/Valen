@@ -77,7 +77,7 @@ def create_tables(conn):
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
-                    message_id TEXT PRIMARY KEY,  
+                    message_id SERIAL PRIMARY KEY,
                     chat_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     role TEXT NOT NULL,
@@ -242,15 +242,14 @@ async def create_chat(request: Request):
             cursor.execute("INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)", (chat_id, user_id, title))
 
             # 3. Insert the user's message
-            user_message_id = data.get("message_id") # Get it from the request
             cursor.execute(
-                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
-                (user_message_id, chat_id, user_id, "user", first_message)
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                (chat_id, user_id, "user", first_message)
             )
-            bot_message_id = str(int(user_message_id) + 1) #Simple increment for bot
+            # 4. Insert the bot's reply
             cursor.execute(
-                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
-                (bot_message_id, chat_id, user_id, "bot", bot_reply)
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                (chat_id, user_id, "bot", bot_reply)
             )
 
         conn.commit()  # Commit the changes
@@ -316,16 +315,16 @@ async def chat(request: Request):
         # --- Database Operations (SAVE NEW MESSAGES) ---
         with conn.cursor() as cursor: #Reusing the connection
             # Insert the user's message
-            user_message_id = data.get("message_id")  # Get from request
             cursor.execute(
-                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
-                (user_message_id, chat_id, user_id, "user", user_message)
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                (chat_id, user_id, "user", user_message)
             )
-            bot_message_id = str(int(user_message_id) + 1)  # Simple increment
+            # Insert the bot's reply
             cursor.execute(
-                "INSERT INTO messages (message_id, chat_id, user_id, role, content) VALUES (%s, %s, %s, %s, %s)",
-                (bot_message_id, chat_id, user_id, "bot", bot_reply)
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                (chat_id, user_id, "bot", bot_reply)
             )
+
         conn.commit()
         conn.close()
         return {"response": bot_reply}
@@ -661,23 +660,44 @@ async def edit_message(request: Request):
     data = await request.json()
     user_id = data.get("user_id")
     chat_id = data.get("chat_id")
-    message_id = data.get("message_id")  # Get the message_id
+    message_id = data.get("message_id")  # This should be the message ID
     new_content = data.get("new_content")
 
     if not user_id or not chat_id or not message_id or new_content is None:
-        return {"error": "Missing data", "success": False}
+        return {"error": "Missing user_id, chat_id, message_id, or new_content", "success": False}
 
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # Use message_id in the WHERE clause
+            # First get the timestamp of message, that user wants to edit.
             cursor.execute(
-                "UPDATE messages SET content = %s WHERE message_id = %s AND user_id = %s AND chat_id = %s",
-                (new_content, int(message_id), user_id, chat_id)  # Convert message_id to integer
+                "SELECT timestamp FROM messages WHERE chat_id = %s and role = 'user' and content = %s ORDER BY timestamp",
+                (chat_id, user_message)
+            )
+            
+            result = cursor.fetchone()
+            
+            # If there is no such message
+            if result is None:
+              return {"error": "Message not found or not updated.", "success": False}
+
+            timestamp = result[0]
+
+            # Get the count of messages from that timestamp
+            cursor.execute(
+                "SELECT COUNT(*) FROM messages WHERE chat_id = %s AND timestamp <= %s",
+                (chat_id, timestamp)
+            )
+            count = cursor.fetchone()[0]
+
+            # Now we know the message id of database.
+            cursor.execute(
+                "UPDATE messages SET content = %s WHERE message_id = %s",
+                (new_content, count)
             )
 
-            if cursor.rowcount == 0:
-                return {"error": "Message not found or not updated", "success": False}
+            if cursor.rowcount == 0: # Check if updated
+              return {"error": "Message not found or not updated.", "success": False}
 
         conn.commit()
         conn.close()
