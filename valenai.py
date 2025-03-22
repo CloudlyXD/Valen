@@ -88,6 +88,20 @@ def create_tables(conn):
                 );
                 """
             )
+
+            # Create the 'favorites' table (since you have /add_favorite and /remove_favorite endpoints)
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS favorites (
+                    user_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    PRIMARY KEY (user_id, chat_id),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id),
+                    FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+                );
+                """
+            )
+
         conn.commit()
         print("✅ Tables created successfully.")
 
@@ -104,7 +118,6 @@ except Exception as e:
     print(f"❌ Application startup failed: {e}")
     exit(1) # Exit the application if database setup fails
 
-
 genai.configure(api_key=api_key_queue[0])  # Initial API key
 # --- Personality Prompt ---
 PERSONALITY_PROMPT = """
@@ -119,10 +132,6 @@ Your tone should be warm, insightful, and humanlike—similar to a knowledgeable
 Always provide clear, well-reasoned responses while maintaining a casual and engaging tone.  
 Use natural phrasing and avoid overly robotic language.  
 If a question is vague, ask for clarification before answering.  
-
-
-
-
 """
 
 # --- Helper Functions ---
@@ -232,7 +241,6 @@ async def create_chat(request: Request):
         # Remove "Valen:" prefix if present
         bot_reply = bot_reply.replace("Valen:", "").strip()
 
-
         # --- Database Operations ---
         conn = get_db_connection()  # Get a database connection
         with conn.cursor() as cursor:
@@ -262,6 +270,129 @@ async def create_chat(request: Request):
         print("Error on create_chat", e)
         return {"title": "New Chat", "response": "I'm sorry, I couldn't process your request. Please try again."}
 
+# --- New API Route: /send_message (Added to Match Frontend Expectations) ---
+@app.post("/send_message")
+async def send_message(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id", "unknown_user")
+    chat_id = data.get("chat_id")
+    message = data.get("message")
+
+    print(f"Received send_message request: user_id={user_id}, chat_id={chat_id}, message={message}")
+
+    if not chat_id or not message:
+        print("Missing chat_id or message")
+        return {"error": "Missing chat_id or message"}
+
+    try:
+        model = genai.GenerativeModel(
+            "gemini-2.0-flash",
+            generation_config={
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+                "max_output_tokens": 8192,
+            }
+        )
+
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            # Check if the chat exists, if not create it
+            cursor.execute(
+                "SELECT title FROM chats WHERE chat_id = %s AND user_id = %s",
+                (chat_id, user_id)
+            )
+            chat = cursor.fetchone()
+            if not chat:
+                print(f"Chat not found, creating new chat with chat_id={chat_id}")
+                cursor.execute(
+                    "INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)",
+                    (chat_id, user_id, "New Chat")
+                )
+
+            # Insert user message
+            cursor.execute(
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
+                (chat_id, user_id, "user", message)
+            )
+            user_message_id = cursor.fetchone()[0]
+            print(f"Inserted user message with message_id={user_message_id}")
+
+            # Fetch chat history for context
+            cursor.execute(
+                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                (chat_id,)
+            )
+            chat_history = cursor.fetchall()
+            print(f"Chat history: {chat_history}")
+
+            # Build prompt
+            history_text = "\n".join([f"{row[0]}: {row[1]}" for row in chat_history])
+            prompt = f"{PERSONALITY_PROMPT}\n\n{history_text}\nUser: {message}\nAI:"
+            print(f"Prompt sent to model: {prompt[:500]}...")  # Truncate for readability
+
+            # Generate response
+            response = model.generate_content(prompt)
+            if response.text and not response.text.isspace():
+                bot_reply = remove_markdown(response.text.strip())
+            else:
+                bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
+            bot_reply = bot_reply.replace("Valen:", "").strip()
+            print(f"Bot reply: {bot_reply}")
+
+            # Insert bot response
+            cursor.execute(
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
+                (chat_id, user_id, "bot", bot_reply)
+            )
+            bot_message_id = cursor.fetchone()[0]
+            print(f"Inserted bot message with message_id={bot_message_id}")
+
+        conn.commit()
+        conn.close()
+
+        # If new chat, update title
+        if not chat:
+            try:
+                new_title = generate_title(message)
+                conn = get_db_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
+                        (new_title, chat_id, user_id)
+                    )
+                conn.commit()
+                conn.close()
+                print(f"Updated chat title to: {new_title}")
+            except Exception as e:
+                print(f"Failed to update chat title: {e}")
+
+        return {"response": bot_reply}
+
+    except google_exceptions.ClientError as e:
+        print(f"Gemini API ClientError: {e}")
+        if "invalid API key" in str(e).lower():
+            if len(api_key_queue) > 1:
+                print("Switching to the next API key...")
+                api_key_queue.rotate(-1)
+                genai.configure(api_key=get_next_api_key())
+                return await send_message(request)  # Retry with new key
+            else:
+                return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
+        elif "quota exceeded" in str(e).lower():
+            if len(api_key_queue) > 1:
+                print("Switching to the next API key (quota exceeded)...")
+                api_key_queue.rotate(-1)
+                genai.configure(api_key=get_next_api_key())
+                return await send_message(request)  # Retry with new key
+            else:
+                return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
+        else:
+            return {"response": "An error occurred while processing your request."}
+
+    except Exception as e:
+        print(f"Error in send_message: {str(e)}")
+        return {"error": f"Failed to process message: {str(e)}"}
 
 # --- API Route for Web Requests (Modified with Logging and Chat Creation) ---
 # Set up logging
@@ -469,7 +600,6 @@ async def add_favorite(request: Request):
         print(f"Error adding favorite: {e}")
         return {"error": "Failed to add favorite", "success": False}
 
-
 @app.post("/remove_favorite")
 async def remove_favorite(request: Request):
     data = await request.json()
@@ -492,7 +622,6 @@ async def remove_favorite(request: Request):
     except Exception as e:
         print(f"Error removing favorite: {e}")
         return {"error": "Failed to remove favorite", "success": False}
-
 
 @app.get("/favorites")
 async def get_favorites(request: Request):
