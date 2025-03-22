@@ -9,6 +9,7 @@ from google.api_core import exceptions as google_exceptions
 import requests
 import psycopg2
 import psycopg2.extras  # For using dictionaries with cursors
+import logging  # Added for debugging
 
 app = FastAPI()
 app.add_middleware(
@@ -262,78 +263,111 @@ async def create_chat(request: Request):
         return {"title": "New Chat", "response": "I'm sorry, I couldn't process your request. Please try again."}
 
 
-# --- API Route for Web Requests ---
+# --- API Route for Web Requests (Modified with Logging and Chat Creation) ---
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")
-    chat_id = data.get("chat_id")  # Get chat ID from frontend
+    chat_id = data.get("chat_id")
     user_message = data.get("message")
 
+    logger.info(f"Received chat request: user_id={user_id}, chat_id={chat_id}, message={user_message}")
+
     if not user_message or not chat_id:
+        logger.warning("Missing chat_id or message")
         return {"error": "No message or chat ID provided"}
 
     try:
         model = genai.GenerativeModel(
-           "gemini-2.0-flash",  # Keep your preferred model
+            "gemini-2.0-flash",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
                 "top_k": 40,
-                "max_output_tokens": 8192, # Use your preferred max tokens
+                "max_output_tokens": 8192,
             }
         )
 
-        # --- Database Operations (LOAD HISTORY) ---
+        # Database Operations (LOAD HISTORY OR CREATE CHAT)
         conn = get_db_connection()
         with conn.cursor() as cursor:
+            # Check if chat exists
+            cursor.execute(
+                "SELECT title FROM chats WHERE chat_id = %s AND user_id = %s",
+                (chat_id, user_id)
+            )
+            chat = cursor.fetchone()
+            if not chat:
+                logger.info(f"Chat not found, creating new chat with chat_id={chat_id}")
+                cursor.execute(
+                    "INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)",
+                    (chat_id, user_id, "New Chat")
+                )
+
+            # Insert user message
+            cursor.execute(
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
+                (chat_id, user_id, "user", user_message)
+            )
+            user_message_id = cursor.fetchone()[0]
+            logger.info(f"Inserted user message with message_id={user_message_id}")
+
+            # Fetch chat history
             cursor.execute(
                 "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
                 (chat_id,)
             )
             chat_history = [f"{row[0]}: {row[1]}" for row in cursor.fetchall()]
+            logger.info(f"Chat history: {chat_history}")
 
-                    # --- CONTEXT WINDOW LIMIT ---
+        # CONTEXT WINDOW LIMIT
         chat_history = chat_history[-100:]  # Keep only the last 100 entries
-
-        # Append user message to history *before* generating prompt
         chat_history.append(f"User: {user_message}")
         prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
+        logger.info(f"Prompt sent to model: {prompt[:500]}...")  # Truncate for readability
 
         response = model.generate_content(prompt)
-
-        # Check if response.text exists and is not empty
         if response.text and not response.text.isspace():
             bot_reply = remove_markdown(response.text.strip())
         else:
             bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
-
-        # Remove "Valen:" prefix if present
         bot_reply = bot_reply.replace("Valen:", "").strip()
+        logger.info(f"Bot reply: {bot_reply}")
 
-
-        # --- Database Operations (SAVE NEW MESSAGES) ---
-        with conn.cursor() as cursor: #Reusing the connection
-            # Insert the user's message
+        # Insert bot reply
+        with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "user", user_message)
-            )
-            # Insert the bot's reply
-            cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
                 (chat_id, user_id, "bot", bot_reply)
             )
+            bot_message_id = cursor.fetchone()[0]
+            logger.info(f"Inserted bot message with message_id={bot_message_id}")
 
         conn.commit()
         conn.close()
+
+        # If new chat, update title
+        if not chat:
+            new_title = generate_title(user_message)
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
+                    (new_title, chat_id, user_id)
+                )
+            conn.commit()
+            logger.info(f"Updated chat title to: {new_title}")
+
         return {"response": bot_reply}
 
     except google_exceptions.ClientError as e:
-        print(f"Gemini API ClientError: {e}")
+        logger.error(f"Gemini API ClientError: {e}")
         if "invalid API key" in str(e).lower():
             if len(api_key_queue) > 1:
-                print("Switching to the next API key...")
+                logger.info("Switching to the next API key...")
                 api_key_queue.rotate(-1)
                 genai.configure(api_key=get_next_api_key())
                 return await chat(request)  # Retry with new key
@@ -341,7 +375,7 @@ async def chat(request: Request):
                 return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
         elif "quota exceeded" in str(e).lower():
             if len(api_key_queue) > 1:
-                print("Switching to the next API key (quota exceeded)...")
+                logger.info("Switching to the next API key (quota exceeded)...")
                 api_key_queue.rotate(-1)
                 genai.configure(api_key=get_next_api_key())
                 return await chat(request)  # Retry with new key
@@ -351,7 +385,7 @@ async def chat(request: Request):
             return {"response": "An error occurred while processing your request."}
 
     except Exception as e:
-        print(f"Error generating response: {e}")
+        logger.error(f"Error generating response: {e}")
         return {"response": "An error occurred while generating a response."}
 
 @app.post("/chat_history")
