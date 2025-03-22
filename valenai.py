@@ -651,41 +651,25 @@ async def regenerate_response(request: Request):
             # Remove "Valen:" prefix if present
             new_bot_reply = new_bot_reply.replace("Valen:", "").strip()
             
-            # Find the bot message to update (the next bot message after the edited message by timestamp)
+            # Delete the old bot message (if it exists) after the edited message
             cursor.execute(
-                "SELECT message_id FROM messages WHERE chat_id = %s AND role = 'bot' AND timestamp > %s ORDER BY timestamp ASC LIMIT 1",
-                (chat_id, edited_timestamp)
+                "DELETE FROM messages WHERE chat_id = %s AND role = 'bot' AND timestamp > %s AND message_id > %s",
+                (chat_id, edited_timestamp, message_id)
             )
-            bot_message = cursor.fetchone()
+            print(f"Deleted old bot messages after message_id {message_id} and timestamp {edited_timestamp}")
             
-            if bot_message:
-                bot_message_id = bot_message[0]
-                print(f"Updating bot message with message_id {bot_message_id} with new content: {new_bot_reply}")
-                # Update the existing bot message
-                cursor.execute(
-                    "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s",
-                    (new_bot_reply, chat_id, bot_message_id)
-                )
-                rows_updated = cursor.rowcount
-                print(f"Rows updated: {rows_updated}")
-            else:
-                print(f"No bot message found after timestamp {edited_timestamp}, inserting new bot message")
-                # Insert a new bot message
-                cursor.execute(
-                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
-                    (chat_id, user_id, "bot", new_bot_reply)
-                )
-                bot_message_id = cursor.fetchone()[0]
-                rows_updated = 1  # Since we inserted a new message
-                print(f"Inserted new bot message with message_id {bot_message_id}")
+            # Insert a new bot message
+            cursor.execute(
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
+                (chat_id, user_id, "bot", new_bot_reply)
+            )
+            bot_message_id = cursor.fetchone()[0]
+            print(f"Inserted new bot message with message_id {bot_message_id}")
         
         conn.commit()
         conn.close()
         
-        if rows_updated > 0:
-            return {"success": True, "response": new_bot_reply}
-        else:
-            return {"success": False, "error": "Bot response not found or couldn't be updated"}
+        return {"success": True, "response": new_bot_reply}
 
     except Exception as e:
         print(f"Error regenerating response: {e}")
