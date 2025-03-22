@@ -527,35 +527,44 @@ async def get_chats(request: Request):
         print(f"Error fetching chats: {e}")
         return {"error": "Failed to retrieve chats", "chats": []}
 
-# --- New API route to update message content ---
-@app.post("/update_message")
-async def update_message(request: Request):
+# --- New API route to edit message ---
+@app.post("/edit_message")
+async def edit_message(request: Request):
     data = await request.json()
-    user_id = data.get("user_id", "unknown_user")
+    user_id = data.get("user_id")
     chat_id = data.get("chat_id")
     message_id = data.get("message_id")
     new_content = data.get("new_content")
 
-    if not chat_id or not message_id or not new_content:
-        return {"error": "Missing chat_id, message_id, or new_content"}
+    if not user_id or not chat_id or not message_id or new_content is None:
+        return {"error": "Missing user_id, chat_id, message_id, or new_content", "success": False}
 
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # Update the message content
+            # Fetch the original timestamp
             cursor.execute(
-                "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s",
-                (new_content, chat_id, message_id)
+                "SELECT timestamp FROM messages WHERE chat_id = %s AND message_id = %s AND user_id = %s AND role = 'user'",
+                (chat_id, message_id, user_id)
             )
-            rows_updated = cursor.rowcount
-        
+            result = cursor.fetchone()
+            if not result:
+                return {"error": "Message not found or not updated", "success": False}
+
+            original_timestamp = result[0]
+
+            # Update the message content while preserving the timestamp
+            cursor.execute(
+                "UPDATE messages SET content = %s, timestamp = %s WHERE chat_id = %s AND message_id = %s AND user_id = %s AND role = 'user'",
+                (new_content, original_timestamp, chat_id, message_id, user_id)
+            )
+
+            if cursor.rowcount == 0:
+                return {"error": "Message not found or not updated", "success": False}
+
         conn.commit()
         conn.close()
-        
-        if rows_updated > 0:
-            return {"success": True}
-        else:
-            return {"success": False, "error": "Message not found or no changes were made"}
+        return {"success": True}
 
     except Exception as e:
         print(f"Error updating message: {e}")
@@ -599,14 +608,14 @@ async def regenerate_response(request: Request):
                 return {"error": "Edited message not found"}
 
             edited_timestamp = edited_message[0]
-            
+
             # Fetch all messages up to and including the edited message
             cursor.execute(
                 "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id <= %s ORDER BY timestamp ASC",
                 (chat_id, message_id)
             )
             messages_up_to_edit = cursor.fetchall()
-            print(f"Messages up to edit (message_id {message_id}): {messages_up_to_edit}")  # Add logging
+            print(f"Messages up to edit (message_id {message_id}): {messages_up_to_edit}")
             
             # Build the chat history, replacing the edited message's content
             chat_history = []
@@ -623,12 +632,12 @@ async def regenerate_response(request: Request):
             )
             result = cursor.fetchone()
             if not result or result[0] != "user":
-                print(f"Edited message not found or not a user message: message_id={message_id}")  # Add logging
+                print(f"Edited message not found or not a user message: message_id={message_id}")
                 return {"error": "Edited message not found or not a user message"}
             
             # Limit the context window
             chat_history = chat_history[-100:]
-            print(f"Chat history for prompt: {chat_history}")  # Add logging
+            print(f"Chat history for prompt: {chat_history}")
             
             # Generate new response
             prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
@@ -648,21 +657,27 @@ async def regenerate_response(request: Request):
                 (chat_id, edited_timestamp)
             )
             bot_message = cursor.fetchone()
-            if not bot_message:
-                print(f"No bot message found after timestamp {edited_timestamp}")  # Add logging
-                return {"success": False, "error": "No bot message found to update"}
             
-            bot_message_id = bot_message[0]
-            print(f"Updating bot message with message_id {bot_message_id} with new content: {new_bot_reply}")  # Add logging
-            
-            # Update the bot's response in the database
-            cursor.execute(
-                "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s",
-                (new_bot_reply, chat_id, bot_message_id)
-            )
-            
-            rows_updated = cursor.rowcount
-            print(f"Rows updated: {rows_updated}")  # Add logging
+            if bot_message:
+                bot_message_id = bot_message[0]
+                print(f"Updating bot message with message_id {bot_message_id} with new content: {new_bot_reply}")
+                # Update the existing bot message
+                cursor.execute(
+                    "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s",
+                    (new_bot_reply, chat_id, bot_message_id)
+                )
+                rows_updated = cursor.rowcount
+                print(f"Rows updated: {rows_updated}")
+            else:
+                print(f"No bot message found after timestamp {edited_timestamp}, inserting new bot message")
+                # Insert a new bot message
+                cursor.execute(
+                    "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
+                    (chat_id, user_id, "bot", new_bot_reply)
+                )
+                bot_message_id = cursor.fetchone()[0]
+                rows_updated = 1  # Since we inserted a new message
+                print(f"Inserted new bot message with message_id {bot_message_id}")
         
         conn.commit()
         conn.close()
@@ -675,38 +690,6 @@ async def regenerate_response(request: Request):
     except Exception as e:
         print(f"Error regenerating response: {e}")
         return {"error": f"Failed to regenerate response: {str(e)}", "success": False}
-
-# --- New API route to edit message ---
-@app.post("/edit_message")
-async def edit_message(request: Request):
-    data = await request.json()
-    user_id = data.get("user_id")
-    chat_id = data.get("chat_id")
-    message_id = data.get("message_id")  # This should be the message ID
-    new_content = data.get("new_content")
-
-    if not user_id or not chat_id or not message_id or new_content is None:
-        return {"error": "Missing user_id, chat_id, message_id, or new_content", "success": False}
-
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            # Update the message content using the message_id directly
-            cursor.execute(
-                "UPDATE messages SET content = %s WHERE chat_id = %s AND message_id = %s AND user_id = %s AND role = 'user'",
-                (new_content, chat_id, message_id, user_id)
-            )
-
-            if cursor.rowcount == 0:  # Check if any rows were updated
-                return {"error": "Message not found or not updated", "success": False}
-
-        conn.commit()
-        conn.close()
-        return {"success": True}
-
-    except Exception as e:
-        print(f"Error updating message: {e}")
-        return {"error": "Failed to update message", "success": False}
 
 # --- Run the API ---
 if __name__ == "__main__":
