@@ -657,6 +657,37 @@ async def regenerate_response(request: Request):
         print(f"Error regenerating response: {e}")
         return {"error": f"Failed to regenerate response: {str(e)}", "success": False}
 
+# --- New API route to edit message ---
+@app.post("/edit_message")
+async def edit_message(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id")
+    chat_id = data.get("chat_id")
+    message_id = data.get("message_id")
+    new_content = data.get("new_content")
+
+    if not user_id or not chat_id or not message_id or new_content is None:  # Include check for None
+        return {"error": "Missing user_id, chat_id, message_id, or new_content"}
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE messages SET content = %s WHERE message_id = %s AND chat_id = %s AND user_id = %s",
+                (new_content, message_id, chat_id, user_id)
+            )
+        conn.commit()
+        conn.close()
+
+        if cursor.rowcount == 0: # Check if updated
+          return {"error": "Message not found or not updated.", "success": False}
+
+        return {"success": True}
+
+    except Exception as e:
+        print(f"Error updating message: {e}")
+        return {"error": "Failed to update message", "success": False}
+
 # --- Run the API ---
 if __name__ == "__main__":
     import uvicorn
