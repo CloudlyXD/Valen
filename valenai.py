@@ -407,13 +407,17 @@ if not chat:
                 "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
                 (new_title, chat_id, user_id)
             )
+        conn.commit()  # Commit the transaction
+        logger.info(f"Updated chat title to: {new_title}")
     except Exception as e:
         # Handle any errors that occur during the try block
         print(f"Error updating chat title: {e}")
-    conn.commit()
-    conn.close()
-    logger.info(f"Updated chat title to: {new_title}")
-
+        if 'conn' in locals():  # Check if conn was created before error
+            conn.rollback()  # Roll back on error
+    finally:
+        # Ensure the connection is closed, if it was opened
+        if 'conn' in locals():
+            conn.close()
         return {"response": bot_reply}
 
     except google_exceptions.ClientError as e:
