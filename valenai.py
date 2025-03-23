@@ -365,7 +365,7 @@ async def send_message(request: Request):
             print(f"Inserted user message with message_id={user_message_id}, timestamp={user_timestamp}")
 
             # Fetch chat history for context
-           cursor.execute(
+            cursor.execute(
                "SELECT role, content FROM messages WHERE chat_id = %s AND message_id != %s ORDER BY timestamp ASC",
                 (chat_id, user_message_id)
              )
