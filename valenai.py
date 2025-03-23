@@ -365,10 +365,10 @@ async def send_message(request: Request):
             print(f"Inserted user message with message_id={user_message_id}, timestamp={user_timestamp}")
 
             # Fetch chat history for context
-            cursor.execute(
-                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
-                (chat_id,)
-            )
+           cursor.execute(
+               "SELECT role, content FROM messages WHERE chat_id = %s AND message_id != %s ORDER BY timestamp ASC",
+                (chat_id, user_message_id)
+             )
             chat_history = cursor.fetchall()
             print(f"Chat history: {chat_history}")
 
@@ -813,9 +813,10 @@ async def regenerate_response(request: Request):
         with conn.cursor() as cursor:
             # Fetch the timestamp of the edited message (for chat history)
             cursor.execute(
-                "SELECT timestamp FROM messages WHERE chat_id = %s AND message_id = %s",
-                (chat_id, message_id)
-            )
+                cursor.execute(
+                 "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id < %s ORDER BY timestamp ASC",
+                  (chat_id, message_id)
+                   )
             edited_message = cursor.fetchone()
             if not edited_message:
                 print(f"Edited message not found: message_id={message_id}")
