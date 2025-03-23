@@ -813,10 +813,9 @@ async def regenerate_response(request: Request):
         with conn.cursor() as cursor:
             # Fetch the timestamp of the edited message (for chat history)
             cursor.execute(
-                cursor.execute(
-                 "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id < %s ORDER BY timestamp ASC",
-                  (chat_id, message_id)
-                   )
+                "SELECT timestamp FROM messages WHERE chat_id = %s AND message_id = %s",
+                (chat_id, message_id)
+            )
             edited_message = cursor.fetchone()
             if not edited_message:
                 print(f"Edited message not found: message_id={message_id}")
@@ -824,9 +823,9 @@ async def regenerate_response(request: Request):
 
             edited_timestamp = edited_message[0]
 
-            # Fetch all messages up to and including the edited message
+            # Fetch all messages up to but not including the edited message
             cursor.execute(
-                "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id <= %s ORDER BY timestamp ASC",
+                "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id < %s ORDER BY timestamp ASC",
                 (chat_id, message_id)
             )
             messages_up_to_edit = cursor.fetchall()
