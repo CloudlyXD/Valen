@@ -397,18 +397,19 @@ async def send_message(request: Request):
         conn.commit()
         conn.close()
 
-        # If new chat, update title
-        if not chat:
-            try:
-        # If new chat, update title
-        if not chat:
-               new_title = generate_title(user_message)
-               conn = get_db_connection()  # Reopen connection
-               with conn.cursor() as cursor:
-              cursor.execute(
-            "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
-            (new_title, chat_id, user_id)
-        )
+# If new chat, update title
+if not chat:
+    try:
+        new_title = generate_title(user_message)
+        conn = get_db_connection()  # Reopen connection
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
+                (new_title, chat_id, user_id)
+            )
+    except Exception as e:
+        # Optionally handle the exception
+        print(f"An error occurred: {e}")
     conn.commit()
     conn.close()
     logger.info(f"Updated chat title to: {new_title}")
