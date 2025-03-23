@@ -408,8 +408,8 @@ if not chat:
                 (new_title, chat_id, user_id)
             )
     except Exception as e:
-        # Optionally handle the exception
-        print(f"An error occurred: {e}")
+        # Handle any errors that occur during the try block
+        print(f"Error updating chat title: {e}")
     conn.commit()
     conn.close()
     logger.info(f"Updated chat title to: {new_title}")
