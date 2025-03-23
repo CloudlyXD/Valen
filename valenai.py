@@ -119,7 +119,6 @@ except Exception as e:
     exit(1) # Exit the application if database setup fails
 
 genai.configure(api_key=api_key_queue[0])  # Initial API key
-
 # --- Personality Prompt ---
 PERSONALITY_PROMPT = """
 Conversational Engagement Prompt:
@@ -317,10 +316,6 @@ async def create_chat(request: Request):
         print("Error on create_chat", e)
         return {"title": "New Chat", "response": "I'm sorry, I couldn't process your request. Please try again."}
 
-# --- Set up logging ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # --- New API Route: /send_message (Added to Match Frontend Expectations) ---
 @app.post("/send_message")
 async def send_message(request: Request):
@@ -347,9 +342,6 @@ async def send_message(request: Request):
         )
 
         conn = get_db_connection()
-        chat_exists = False
-        bot_reply = None
-        
         with conn.cursor() as cursor:
             # Check if the chat exists, if not create it
             cursor.execute(
@@ -357,9 +349,7 @@ async def send_message(request: Request):
                 (chat_id, user_id)
             )
             chat = cursor.fetchone()
-            if chat:
-                chat_exists = True
-            else:
+            if not chat:
                 print(f"Chat not found, creating new chat with chat_id={chat_id}")
                 cursor.execute(
                     "INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)",
@@ -404,31 +394,29 @@ async def send_message(request: Request):
             bot_message_id = cursor.fetchone()[0]
             print(f"Inserted bot message with message_id={bot_message_id}")
 
+        conn.commit()
+        conn.close()
+
         # If new chat, update title
-        if not chat_exists:
+        if not chat:
             try:
                 new_title = generate_title(message)
+                conn = get_db_connection()
                 with conn.cursor() as cursor:
                     cursor.execute(
                         "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
                         (new_title, chat_id, user_id)
                     )
-                logger.info(f"Updated chat title to: {new_title}")
+                conn.commit()
+                conn.close()
+                print(f"Updated chat title to: {new_title}")
             except Exception as e:
-                print(f"Error updating chat title: {e}")
-                if 'conn' in locals():
-                    conn.rollback()
-
-        conn.commit()
-        conn.close()
+                print(f"Failed to update chat title: {e}")
 
         return {"response": bot_reply}
 
     except google_exceptions.ClientError as e:
         print(f"Gemini API ClientError: {e}")
-        if 'conn' in locals():
-            conn.rollback()
-            conn.close()
         if "invalid API key" in str(e).lower():
             if len(api_key_queue) > 1:
                 print("Switching to the next API key...")
@@ -450,12 +438,13 @@ async def send_message(request: Request):
 
     except Exception as e:
         print(f"Error in send_message: {str(e)}")
-        if 'conn' in locals():
-            conn.rollback()
-            conn.close()
         return {"error": f"Failed to process message: {str(e)}"}
 
 # --- API Route for Web Requests (Modified with Logging and Chat Creation) ---
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
@@ -482,8 +471,6 @@ async def chat(request: Request):
 
         # Database Operations (LOAD HISTORY OR CREATE CHAT)
         conn = get_db_connection()
-        chat_exists = False
-        
         with conn.cursor() as cursor:
             # Check if chat exists
             cursor.execute(
@@ -491,9 +478,7 @@ async def chat(request: Request):
                 (chat_id, user_id)
             )
             chat = cursor.fetchone()
-            if chat:
-                chat_exists = True
-            else:
+            if not chat:
                 logger.info(f"Chat not found, creating new chat with chat_id={chat_id}")
                 cursor.execute(
                     "INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)",
@@ -539,30 +524,24 @@ async def chat(request: Request):
             bot_message_id = cursor.fetchone()[0]
             logger.info(f"Inserted bot message with message_id={bot_message_id}")
 
-        # If new chat, update title
-        if not chat_exists:
-            try:
-                new_title = generate_title(user_message)
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
-                        (new_title, chat_id, user_id)
-                    )
-                logger.info(f"Updated chat title to: {new_title}")
-            except Exception as e:
-                logger.error(f"Error updating chat title: {e}")
-                conn.rollback()
-
         conn.commit()
         conn.close()
+
+        # If new chat, update title
+        if not chat:
+            new_title = generate_title(user_message)
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
+                    (new_title, chat_id, user_id)
+                )
+            conn.commit()
+            logger.info(f"Updated chat title to: {new_title}")
 
         return {"response": bot_reply}
 
     except google_exceptions.ClientError as e:
         logger.error(f"Gemini API ClientError: {e}")
-        if 'conn' in locals():
-            conn.rollback()
-            conn.close()
         if "invalid API key" in str(e).lower():
             if len(api_key_queue) > 1:
                 logger.info("Switching to the next API key...")
@@ -584,9 +563,6 @@ async def chat(request: Request):
 
     except Exception as e:
         logger.error(f"Error generating response: {e}")
-        if 'conn' in locals():
-            conn.rollback()
-            conn.close()
         return {"response": "An error occurred while generating a response."}
 
 @app.post("/chat_history")
