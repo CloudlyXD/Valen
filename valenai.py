@@ -257,14 +257,16 @@ Just return the title text with no additional explanations or prefixes.
 async def create_chat(request: Request):
     data = await request.json()
     user_id = data.get("user_id", "unknown_user")
-    chat_id = data.get("chat_id")
+    chat_id = data.get("chat_id")  # Must be provided by the frontend
     first_message = data.get("message")
 
     if not chat_id or not first_message:
         return {"error": "Missing chat_id or message"}
 
+    # Generate the title *before* saving any history
     title = generate_title(first_message)
 
+    # Respond with the title *and* the initial bot reply
     try:
         model = genai.GenerativeModel(
             "gemini-2.0-flash",
@@ -275,12 +277,21 @@ async def create_chat(request: Request):
                 "max_output_tokens": 1024,
             }
         )
+        prompt = f"{PERSONALITY_PROMPT}\n\nUser: {first_message}\nAI:" # Initial Prompt
+        response = model.generate_content(prompt)
+        bot_reply = remove_markdown(response.text.strip()) if response.text else "I'm sorry, I couldn't generate a response. Please try again."
+        bot_reply = bot_reply.replace("Valen:", "").strip()
 
-        conn = get_db_connection()
+        # --- Database Operations ---
+        conn = get_db_connection()  # Get a database connection
         with conn.cursor() as cursor:
+            # 1. Insert the user (if they don't exist)
             cursor.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+
+            # 2. Insert the chat
             cursor.execute("INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)", (chat_id, user_id, title))
 
+            # 3. Insert the user's message and get its timestamp
             cursor.execute(
                 "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id, timestamp",
                 (chat_id, user_id, "user", first_message)
@@ -288,14 +299,7 @@ async def create_chat(request: Request):
             user_message_id, user_timestamp = cursor.fetchone()
             print(f"Inserted user message with message_id={user_message_id}, timestamp={user_timestamp}")
 
-            # Since this is a new chat, chat history should be empty
-            chat_history = []  # No need to fetch, since this is the first message
-
-            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join([f"{row[0]}: {row[1]}" for row in chat_history]) + f"\nUser: {first_message}\nAI:"
-            response = model.generate_content(prompt)
-            bot_reply = remove_markdown(response.text.strip()) if response.text else "I'm sorry, I couldn't generate a response. Please try again."
-            bot_reply = bot_reply.replace("Valen:", "").strip()
-
+            # 4. Insert the bot's reply with a timestamp 1 millisecond later
             cursor.execute(
                 "INSERT INTO messages (chat_id, user_id, role, content, timestamp) VALUES (%s, %s, %s, %s, %s + INTERVAL '1 millisecond') RETURNING message_id",
                 (chat_id, user_id, "bot", bot_reply, user_timestamp)
@@ -303,10 +307,10 @@ async def create_chat(request: Request):
             bot_message_id = cursor.fetchone()[0]
             print(f"Inserted bot message with message_id={bot_message_id}")
 
-        conn.commit()
+        conn.commit()  # Commit the changes
         conn.close()
 
-        return {"title": title, "response": bot_reply}
+        return {"title": title, "response": bot_reply}  # Return title and AI reply
 
     except Exception as e:
         print("Error on create_chat", e)
@@ -320,7 +324,7 @@ async def send_message(request: Request):
     chat_id = data.get("chat_id")
     message = data.get("message")
 
-    print(f"Received send_message request: user_id={user_id}, chat_id={chat_id}, message={message}, timestamp={datetime.now()}")
+    print(f"Received send_message request: user_id={user_id}, chat_id={chat_id}, message={message}")
 
     if not chat_id or not message:
         print("Missing chat_id or message")
@@ -339,7 +343,7 @@ async def send_message(request: Request):
 
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            print(f"Checking if chat exists: chat_id={chat_id}, user_id={user_id}")
+            # Check if the chat exists, if not create it
             cursor.execute(
                 "SELECT title FROM chats WHERE chat_id = %s AND user_id = %s",
                 (chat_id, user_id)
@@ -352,7 +356,7 @@ async def send_message(request: Request):
                     (chat_id, user_id, "New Chat")
                 )
 
-            print(f"Inserting user message: {message}")
+            # Insert user message and get its timestamp
             cursor.execute(
                 "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id, timestamp",
                 (chat_id, user_id, "user", message)
@@ -360,11 +364,10 @@ async def send_message(request: Request):
             user_message_id, user_timestamp = cursor.fetchone()
             print(f"Inserted user message with message_id={user_message_id}, timestamp={user_timestamp}")
 
-            # Fetch chat history, EXCLUDING the current user message
-            print(f"Fetching chat history for chat_id={chat_id}, excluding message_id={user_message_id}")
+            # Fetch chat history for context
             cursor.execute(
-                "SELECT role, content FROM messages WHERE chat_id = %s AND message_id != %s ORDER BY timestamp ASC",
-                (chat_id, user_message_id)
+                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY timestamp ASC",
+                (chat_id,)
             )
             chat_history = cursor.fetchall()
             print(f"Chat history: {chat_history}")
@@ -372,9 +375,9 @@ async def send_message(request: Request):
             # Build prompt
             history_text = "\n".join([f"{row[0]}: {row[1]}" for row in chat_history])
             prompt = f"{PERSONALITY_PROMPT}\n\n{history_text}\nUser: {message}\nAI:"
-            print(f"Prompt sent to model: {prompt[:500]}...")
+            print(f"Prompt sent to model: {prompt[:500]}...")  # Truncate for readability
 
-            print("Generating response from Gemini API...")
+            # Generate response
             response = model.generate_content(prompt)
             if response.text and not response.text.isspace():
                 bot_reply = remove_markdown(response.text.strip())
@@ -383,7 +386,7 @@ async def send_message(request: Request):
             bot_reply = bot_reply.replace("Valen:", "").strip()
             print(f"Bot reply: {bot_reply}")
 
-            print(f"Inserting bot message with timestamp {user_timestamp} + 1ms")
+            # Insert bot response with a timestamp 1 millisecond later than the user message
             cursor.execute(
                 "INSERT INTO messages (chat_id, user_id, role, content, timestamp) VALUES (%s, %s, %s, %s, %s + INTERVAL '1 millisecond') RETURNING message_id",
                 (chat_id, user_id, "bot", bot_reply, user_timestamp)
@@ -392,15 +395,14 @@ async def send_message(request: Request):
             print(f"Inserted bot message with message_id={bot_message_id}")
 
         conn.commit()
-        print("Database changes committed")
         conn.close()
 
+        # If new chat, update title
         if not chat:
             try:
                 new_title = generate_title(message)
                 conn = get_db_connection()
                 with conn.cursor() as cursor:
-                    print(f"Updating chat title to: {new_title}")
                     cursor.execute(
                         "UPDATE chats SET title = %s WHERE chat_id = %s AND user_id = %s",
                         (new_title, chat_id, user_id)
@@ -429,7 +431,7 @@ async def send_message(request: Request):
                 api_key_queue.rotate(-1)
                 genai.configure(api_key=get_next_api_key())
                 return await send_message(request)  # Retry with new key
-           else:
+            else:
                 return {"response": "Due to unexpected capacity constraints, I am unable to respond to your message. Please try again soon."}
         else:
             return {"response": "An error occurred while processing your request."}
@@ -805,8 +807,11 @@ async def regenerate_response(request: Request):
             }
         )
 
+        # Get chat history up to the edited message
         conn = get_db_connection()
+        
         with conn.cursor() as cursor:
+            # Fetch the timestamp of the edited message (for chat history)
             cursor.execute(
                 "SELECT timestamp FROM messages WHERE chat_id = %s AND message_id = %s",
                 (chat_id, message_id)
@@ -818,18 +823,23 @@ async def regenerate_response(request: Request):
 
             edited_timestamp = edited_message[0]
 
-            # Fetch all messages up to the edited message, EXCLUDING the edited message
+            # Fetch all messages up to and including the edited message
             cursor.execute(
-                "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id < %s ORDER BY timestamp ASC",
+                "SELECT message_id, role, content FROM messages WHERE chat_id = %s AND message_id <= %s ORDER BY timestamp ASC",
                 (chat_id, message_id)
             )
             messages_up_to_edit = cursor.fetchall()
             print(f"Messages up to edit (message_id {message_id}): {messages_up_to_edit}")
-
+            
+            # Build the chat history, replacing the edited message's content
             chat_history = []
             for msg_id, role, content in messages_up_to_edit:
-                chat_history.append(f"{role}: {content}")
-
+                if str(msg_id) == str(message_id):
+                    chat_history.append(f"User: {edited_content}")
+                else:
+                    chat_history.append(f"{role}: {content}")
+            
+            # Ensure the edited message exists and is a user message
             cursor.execute(
                 "SELECT role FROM messages WHERE chat_id = %s AND message_id = %s",
                 (chat_id, message_id)
@@ -838,35 +848,41 @@ async def regenerate_response(request: Request):
             if not result or result[0] != "user":
                 print(f"Edited message not found or not a user message: message_id={message_id}")
                 return {"error": "Edited message not found or not a user message"}
-
+            
+            # Limit the context window
             chat_history = chat_history[-100:]
             print(f"Chat history for prompt: {chat_history}")
-
-            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + f"\nUser: {edited_content}\nAI:"
+            
+            # Generate new response
+            prompt = f"{PERSONALITY_PROMPT}\n\n" + "\n".join(chat_history) + "\nAI:"
             response = model.generate_content(prompt)
-
+            
             if response.text and not response.text.isspace():
                 new_bot_reply = remove_markdown(response.text.strip())
             else:
                 new_bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
+            
+            # Remove "Valen:" prefix if present
             new_bot_reply = new_bot_reply.replace("Valen:", "").strip()
-
+            
+            # Delete all bot messages after the edited message
             cursor.execute(
                 "DELETE FROM messages WHERE chat_id = %s AND role = 'bot' AND message_id > %s",
                 (chat_id, message_id)
             )
             print(f"Deleted old bot messages after message_id {message_id}")
-
+            
+            # Insert a new bot message with a timestamp 1 millisecond later than the edited message
             cursor.execute(
                 "INSERT INTO messages (chat_id, user_id, role, content, timestamp) VALUES (%s, %s, %s, %s, %s + INTERVAL '1 millisecond') RETURNING message_id",
                 (chat_id, user_id, "bot", new_bot_reply, edited_timestamp)
             )
             bot_message_id = cursor.fetchone()[0]
             print(f"Inserted new bot message with message_id {bot_message_id}")
-
+        
         conn.commit()
         conn.close()
-
+        
         return {"success": True, "response": new_bot_reply}
 
     except Exception as e:
