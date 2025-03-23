@@ -401,7 +401,7 @@ async def send_message(request: Request):
         if not chat:
             try:
         # If new chat, update title
-               if not chat:
+          if not chat:
                new_title = generate_title(user_message)
                conn = get_db_connection()  # Reopen connection
                with conn.cursor() as cursor:
