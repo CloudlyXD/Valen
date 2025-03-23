@@ -280,8 +280,6 @@ async def create_chat(request: Request):
         prompt = f"{PERSONALITY_PROMPT}\n\nUser: {first_message}\nAI:" # Initial Prompt
         response = model.generate_content(prompt)
         bot_reply = remove_markdown(response.text.strip()) if response.text else "I'm sorry, I couldn't generate a response. Please try again."
-
-        # Remove "Valen:" prefix if present
         bot_reply = bot_reply.replace("Valen:", "").strip()
 
         # --- Database Operations ---
@@ -293,16 +291,21 @@ async def create_chat(request: Request):
             # 2. Insert the chat
             cursor.execute("INSERT INTO chats (chat_id, user_id, title) VALUES (%s, %s, %s)", (chat_id, user_id, title))
 
-            # 3. Insert the user's message
+            # 3. Insert the user's message and get its timestamp
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id, timestamp",
                 (chat_id, user_id, "user", first_message)
             )
-            # 4. Insert the bot's reply
+            user_message_id, user_timestamp = cursor.fetchone()
+            print(f"Inserted user message with message_id={user_message_id}, timestamp={user_timestamp}")
+
+            # 4. Insert the bot's reply with a timestamp 1 millisecond later
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s)",
-                (chat_id, user_id, "bot", bot_reply)
+                "INSERT INTO messages (chat_id, user_id, role, content, timestamp) VALUES (%s, %s, %s, %s, %s + INTERVAL '1 millisecond') RETURNING message_id",
+                (chat_id, user_id, "bot", bot_reply, user_timestamp)
             )
+            bot_message_id = cursor.fetchone()[0]
+            print(f"Inserted bot message with message_id={bot_message_id}")
 
         conn.commit()  # Commit the changes
         conn.close()
@@ -353,13 +356,13 @@ async def send_message(request: Request):
                     (chat_id, user_id, "New Chat")
                 )
 
-            # Insert user message
+            # Insert user message and get its timestamp
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
+                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id, timestamp",
                 (chat_id, user_id, "user", message)
             )
-            user_message_id = cursor.fetchone()[0]
-            print(f"Inserted user message with message_id={user_message_id}")
+            user_message_id, user_timestamp = cursor.fetchone()
+            print(f"Inserted user message with message_id={user_message_id}, timestamp={user_timestamp}")
 
             # Fetch chat history for context
             cursor.execute(
@@ -383,10 +386,10 @@ async def send_message(request: Request):
             bot_reply = bot_reply.replace("Valen:", "").strip()
             print(f"Bot reply: {bot_reply}")
 
-            # Insert bot response
+            # Insert bot response with a timestamp 1 millisecond later than the user message
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
-                (chat_id, user_id, "bot", bot_reply)
+                "INSERT INTO messages (chat_id, user_id, role, content, timestamp) VALUES (%s, %s, %s, %s, %s + INTERVAL '1 millisecond') RETURNING message_id",
+                (chat_id, user_id, "bot", bot_reply, user_timestamp)
             )
             bot_message_id = cursor.fetchone()[0]
             print(f"Inserted bot message with message_id={bot_message_id}")
@@ -869,10 +872,10 @@ async def regenerate_response(request: Request):
             )
             print(f"Deleted old bot messages after message_id {message_id}")
             
-            # Insert a new bot message
+            # Insert a new bot message with a timestamp 1 millisecond later than the edited message
             cursor.execute(
-                "INSERT INTO messages (chat_id, user_id, role, content) VALUES (%s, %s, %s, %s) RETURNING message_id",
-                (chat_id, user_id, "bot", new_bot_reply)
+                "INSERT INTO messages (chat_id, user_id, role, content, timestamp) VALUES (%s, %s, %s, %s, %s + INTERVAL '1 millisecond') RETURNING message_id",
+                (chat_id, user_id, "bot", new_bot_reply, edited_timestamp)
             )
             bot_message_id = cursor.fetchone()[0]
             print(f"Inserted new bot message with message_id {bot_message_id}")
