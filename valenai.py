@@ -190,16 +190,6 @@ Contextual Understanding and Follow-Up Questions:
 
 """
 
-# --- Helper Functions ---
-def remove_markdown(text):
-    """Removes basic Markdown formatting."""
-    if not text:  # Handle None or empty string
-        return ""
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
-    text = re.sub(r'~~(.*?)~~', r'\1', text)
-    return text
 
 
 def generate_title(first_message: str) -> str:
@@ -293,7 +283,7 @@ async def create_chat(request: Request):
         )
         prompt = f"{PERSONALITY_PROMPT}\n\nUser: {first_message}\nAI:" # Initial Prompt
         response = model.generate_content(prompt)
-        bot_reply = remove_markdown(response.text.strip()) if response.text else "I'm sorry, I couldn't generate a response. Please try again."
+        bot_reply = response.text.strip() if response.text else "I'm sorry, I couldn't generate a response. Please try again."
         bot_reply = bot_reply.replace("Valen:", "").strip()
 
         # --- Database Operations ---
@@ -394,7 +384,7 @@ async def send_message(request: Request):
             # Generate response
             response = model.generate_content(prompt)
             if response.text and not response.text.isspace():
-                bot_reply = remove_markdown(response.text.strip())
+                bot_reply = response.text.strip()
             else:
                 bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
             bot_reply = bot_reply.replace("Valen:", "").strip()
@@ -523,7 +513,7 @@ async def chat(request: Request):
 
         response = model.generate_content(prompt)
         if response.text and not response.text.isspace():
-            bot_reply = remove_markdown(response.text.strip())
+            bot_reply = response.text.strip()
         else:
             bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
         bot_reply = bot_reply.replace("Valen:", "").strip()
@@ -872,7 +862,7 @@ async def regenerate_response(request: Request):
             response = model.generate_content(prompt)
             
             if response.text and not response.text.isspace():
-                new_bot_reply = remove_markdown(response.text.strip())
+                new_bot_reply = response.text.strip()
             else:
                 new_bot_reply = "I'm sorry, I couldn't generate a response. Please try again."
             
