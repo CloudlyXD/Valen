@@ -190,16 +190,7 @@ Contextual Understanding and Follow-Up Questions:
 
 """
 
-# --- Helper Functions ---
-def remove_markdown(text):
-    """Removes basic Markdown formatting."""
-    if not text:  # Handle None or empty string
-        return ""
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'_{1,2}(.*?)_{1,2}', r'\1', text)
-    text = re.sub(r'~~(.*?)~~', r'\1', text)
-    return text
+
 
 def generate_title(first_message: str) -> str:
     """Generates a concise but meaningful title for the chat based on the first message."""
