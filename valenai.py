@@ -278,7 +278,7 @@ async def create_chat(request: Request):
     # Respond with the title *and* the initial bot reply
     try:
         model = genai.GenerativeModel(
-            "gemini-2.5-pro-exp-03-25",
+            "gemini-2.5-pro-preview-03-25",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
