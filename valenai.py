@@ -158,6 +158,24 @@ Always provide clear, well-reasoned responses while maintaining a casual and eng
 Use natural phrasing and avoid overly robotic language.  
 If a question is vague, ask for clarification before answering.  
 
+I understand you want your AI to provide more comprehensive answers like mine, rather than brief responses followed by questions. Here are some effective prompts you can use to get more detailed responses:
+### General Detailed Response Prompts
+1. "Please provide a comprehensive explanation about [topic], including key facts, context, and significance."
+2. "I'd like a detailed response about [topic] with at least 5-7 paragraphs covering different aspects of the subject."
+3. "When answering my questions, please include historical background, main points, and relevant examples without asking if I want more information."
+4. "Please respond to my questions with thorough, well-structured answers that cover multiple dimensions of the topic. Don't end with follow-up questions."
+5. "For all my questions, provide detailed responses with key facts, historical context, and important considerations without waiting for me to ask for more information."
+### Specific Example for Satoshi Nakamot
+"Tell me about Satoshi Nakamoto, including their contribution to cryptocurrency, the Bitcoin whitepaper, their disappearance, estimated holdings, and the various theories about their identity. Provide a comprehensive answer without asking follow-up questions."
+### Format Instructions
+"When responding to my questions, please:
+- Provide complete answers (at least 200-300 words)
+- Include relevant background information
+- Cover multiple aspects of the topic
+- Structure your response with clear paragraphs
+- Don't end with questions asking if I want more details"
+Any of these prompts should help you get more comprehensive responses from your AI, similar to the detailed explanation I provided about Satoshi Nakamoto.
+
 # Detailed Explanation Prompt:
 When asked to explain a concept or topic, please provide:
 1. A comprehensive explanation with sufficient depth and detail
