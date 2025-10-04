@@ -232,7 +232,7 @@ def generate_title(first_message: str) -> str:
         # 1. Truncate very long messages for the title generation prompt
         truncated_message = first_message[:200] + "..." if len(first_message) > 200 else first_message
 
-        model = genai.GenerativeModel("gemini-2.0-flash")  # Keep the model as specified
+        model = genai.GenerativeModel("gemini-2.5-pro")  # Keep the model as specified
 
         # 2. Improved prompt for better title generation
         prompt = f"""
@@ -307,7 +307,7 @@ async def create_chat(request: Request):
     # Respond with the title *and* the initial bot reply
     try:
         model = genai.GenerativeModel(
-            "gemini-2.5-pro-preview-03-25",
+            "gemini-2.5-pro",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -370,7 +370,7 @@ async def send_message(request: Request):
 
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-2.5-pro",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -498,7 +498,7 @@ async def chat(request: Request):
 
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-2.5-pro",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -836,7 +836,7 @@ async def regenerate_response(request: Request):
 
     try:
         model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-2.5-pro",
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.9,
